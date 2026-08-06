@@ -16,6 +16,7 @@ motto: "重要需求多查几轮，查过的次数记下来。"
 `/code-recheck-from <commitId>`，例如 `/code-recheck-from acd4fef8`。
 
 ## 流程
+0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿 10 维检查清单、报告格式、严禁清单后再开始
 1. **取 commitId**：从用户消息里取提交 id 参数
 2. **重查扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> recheck --from <commitId>`
    （含该提交 + 之后的新提交 + 工作区，已查 N 次 / 0=新）

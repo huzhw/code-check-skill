@@ -14,6 +14,7 @@ motto: "增量检查不是偷懒——查过的记下来，只碰新代码。"
 `/code-check-from <commitId>`，例如 `/code-check-from acd4fef8`（commitId 是 git 提交短码/全码）。
 
 ## 流程
+0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿 10 维检查清单、报告格式、严禁清单后再开始
 1. **取 commitId**：从用户消息里取提交 id 参数
 2. **扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> scan --from <commitId>`
    （`--from` 含该提交本身 + 之后的新提交 + 工作区改动；id 非法会报错）

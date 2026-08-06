@@ -11,6 +11,7 @@ motto: "历史一次性归档，只碰新代码。"
 把仓库**全部历史 commit 标记为已检查**（`check_count=0` 种子，未实际检查），**只刷库不检查**。老仓库（几百/几千 commit）首次用 code-check 前跑一次，之后增量就只查新改动，不会把历史全列为待查。
 
 ## 流程
+0. **先读主技能**（了解机制，刷库不检查）：`Read F:/idea-workspase-skills/code-check/SKILL.md`
 1. **刷库**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> baseline`
 2. 输出「📌 已建立基线：标记 N 个历史 commit 为已检查」即完成，**不做实际检查**
 3. 可 `status` 确认种子数（check_count=0 的条数）
