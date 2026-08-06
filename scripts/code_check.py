@@ -91,9 +91,11 @@ def now():
 
 # ---------------- 已提交改动 ----------------
 
-def list_commits(root, author=None):
+def list_commits(root, author=None, since=None):
     """全部非 merge 提交。返回 [{hash, time, author, subject}]。"""
     args = ["log", "--no-merges", "--format=%H\t%aI\t%an\t%s"]
+    if since:
+        args.append("--since=" + since)
     if author:
         args.append("--author=" + author)
     out = git(root, *args)
@@ -205,7 +207,7 @@ def cmd_scan(args):
     conn = init_db(db_path)
 
     # 1. 已提交的新 commit
-    commits = list_commits(root, author=args.author)
+    commits = list_commits(root, author=args.author, since=args.since)
     new_commits = filter_new_commits(conn, rid, commits)
     commit_detail = []
     for c in new_commits:
@@ -368,6 +370,8 @@ def main():
 
     p_scan = sub.add_parser("scan", help="扫描待检查改动")
     p_scan.add_argument("--author", default=None, help="只查该作者的提交")
+    p_scan.add_argument("--since", default=None,
+                        help="只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago")
     p_scan.add_argument("--json", action="store_true", help="JSON 输出")
 
     p_mark = sub.add_parser("mark", help="标记已检查")
