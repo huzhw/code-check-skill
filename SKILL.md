@@ -93,6 +93,7 @@ python "{技能目录}/scripts/code_check.py" scan
 | **方言兼容** | 达梦/国产库 ROWNUM、分页、关键字、双引号、与 Oracle/MySQL 差异 | 分页写法不兼容、保留字当列名 |
 | **前端** | XSS、危险标签、v-html、无 key、内存泄漏 | 注入 HTML、循环无 key |
 | **事务** | 批量操作无事务、提交过早、脏读 | 半途失败数据不一致 |
+| **数据表操作** | diff 里每处 SQL（Mapper XML / @Select / JDBC / 存储过程调用）涉及的库（schema）+ 表名 + 操作类型（INSERT/UPDATE/DELETE/SELECT） | 表名写错库、表名拼错、改了 A 表却以为是 B 表、跨 schema 引用没带前缀 |
 | **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、覆盖写无备份 | `rm -rf`/`os.remove`/`File.delete`、`DROP TABLE`/`TRUNCATE`/`DELETE FROM` 无 WHERE、覆盖不备份 |
 | **敏感信息** | 硬编码密钥/口令、日志打印密码/token、.env/证书入库 | API key 写死、log 打 token、`git add .` 带上 .env |
 | **路径安全** | **解压/写入未在临时目录内加随机子目录隔离**、上传文件名拼接、解压路径穿越、符号链接 | **解压直接落临时目录根、`../` 逃逸出子目录**、`new File(dir+name)`、软链指向外部目录 |
@@ -108,6 +109,14 @@ python "{技能目录}/scripts/code_check.py" scan
 
 结论：查 {N} 个 commit + {M} 个工作区文件。⚠️ 需处理 {Y} 个，🔶 待确认 {Z} 个，其余 ✅。
 {一句话总评，如「无紧急问题，可正常使用」或「有高风险需立即处理」}
+
+### 🗄️ 数据表操作清单（本次改动涉及的库·表·操作）
+| 库/SCHEMA | 表名 | 操作 | 来源 |
+|---|---|---|---|
+| AI_AUDIT | push_archive_json_log | INSERT | {文件}:{行号} |
+| DG_V5 | T_XY_CMS_CATALOG_FC | SELECT | {文件}:{行号} |
+
+规则：**只列本次 diff 实际 SQL 涉及的表**，不在改动的表不列；库名 = SQL 里 schema 前缀或 datasource 归属，无前缀标「本库」；操作按语句类型 INSERT/UPDATE/DELETE/SELECT，批量/循环标注；用途是核对表名有没有写错库、拼错、张冠李戴。
 
 ### ⚠️ 需处理（{Y}）
 - `{文件}:{行号}` —— 一句话问题
