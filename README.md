@@ -59,7 +59,7 @@
 | **前端** | XSS、危险标签、v-html、无 key、内存泄漏 | 注入 HTML、循环无 key |
 | **事务** | 批量操作无事务、提交过早、脏读 | 半途失败数据不一致 |
 | **数据表操作** | diff 里每处 SQL 涉及的库（schema）+ 表名 + 操作类型 | 表名写错库、表名拼错、张冠李戴 |
-| **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、覆盖写无备份 | `rm -rf`、`DROP TABLE`/`TRUNCATE`、`DELETE`/`UPDATE` 无 WHERE、覆盖不备份 |
+| **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、删对象（库/表/用户/索引/列）、权限变更、覆盖写无备份 | `rm -rf`、`DROP TABLE`/`TRUNCATE`、`DELETE`/`UPDATE` 无 WHERE、`DROP USER`/`DROP INDEX`/`DROP DATABASE`/`ALTER TABLE DROP COLUMN`、`REVOKE`、覆盖不备份 |
 | **敏感信息** | 硬编码密钥/口令、日志打印密码/token、.env/证书入库 | API key 写死、log 打 token |
 | **路径安全** | 解压/写入未隔离、上传文件名拼接、解压路径穿越、符号链接 | 解压落临时目录根、`../` 逃逸、软链指向外部 |
 
