@@ -9,10 +9,11 @@ code-check 增量代码检查脚本
 三张表两张，一张按 commit 去重（已提交），一张按文件内容 hash 去重（未提交工作区改动）。
 
 命令：
-    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--baseline]
-        扫描待检查改动：已提交新 commit + 未提交工作区改动，输出清单。
+    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--baseline] [--quiet]
+        扫描待检查改动：已提交新 commit + 未提交工作区改动，输出精简清单。
         --since：只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago。
         --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
+        --quiet：只输出「N commit / M 文件待查」一行，供快速判断。
     python code_check.py mark [--commit <hash>]... [--file <路径>:<内容hash>]...
         标记已检查，写回 SQLite。
     python code_check.py status
@@ -281,39 +282,50 @@ def cmd_scan(args):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
-    print("=" * 60)
-    print("code-check 扫描结果")
-    print("repo      :", rid)
-    print("db        :", db_path)
-    print("=" * 60)
-    print("\n## 已提交的新 commit（{} 个）".format(len(commit_detail)))
-    for c in commit_detail:
-        short = c["hash"][:7]
-        print("\n[{short}] {time}  {author}  {subject}".format(
-            short=short, time=c["time"][:16], author=c["author"], subject=c["subject"]))
-        print("  → 标记: python code_check.py mark --commit {hash}".format(hash=c["hash"]))
-        if c["files"]:
-            for status, path in c["files"]:
-                print("    {status}  {path}".format(status=status, path=path))
-
-    print("\n## 未提交工作区改动（{} 个文件）".format(
-        sum(1 for f in work_detail if not f["checked_before"])))
-    for f in work_detail:
-        tag = "已查过" if f["checked_before"] else "新增"
-        print("  [{tag}] {status}  {path}".format(
-            tag=tag, status=f["status"], path=f["path"]))
-    new_files = [f for f in work_detail if not f["checked_before"]]
-    if new_files:
-        print("\n  → 标记示例:")
-        for f in new_files:
-            print("      python code_check.py mark --file {path}:{h}".format(
-                path=f["path"], h=f["content_hash"]))
-
     n_new_commit = len(commit_detail)
-    n_new_file = sum(1 for f in work_detail if not f["checked_before"])
-    print("\n共待检查：{} 个 commit，{} 个工作区文件".format(n_new_commit, n_new_file))
+    new_files = [f for f in work_detail if not f["checked_before"]]
+    n_new_file = len(new_files)
+
+    if args.quiet:
+        # 只出一行总结，供快速判断是否有待查项
+        if n_new_commit == 0 and n_new_file == 0:
+            print("✅ 没有新改动")
+        else:
+            print("待查：{} 个 commit，{} 个工作区文件".format(n_new_commit, n_new_file))
+        return
+
+    print("=" * 50)
+    print("code-check 扫描：{}".format(os.path.basename(os.path.normpath(root))))
+    print("=" * 50)
+    print("待查：{} 个 commit，{} 个工作区文件".format(n_new_commit, n_new_file))
     if n_new_commit == 0 and n_new_file == 0:
         print("✅ 没有新改动，全部已检查过。")
+        return
+    print()
+
+    if commit_detail:
+        print("【已提交的新 commit】")
+        for c in commit_detail:
+            short = c["hash"][:7]
+            # c["time"] 形如 2026-08-06T18:47:34+08:00，取 MM-DD HH:MM
+            t = c["time"][5:16].replace("T", " ")
+            print("  [{short}] {time} {author}  {subject}".format(
+                short=short, time=t, author=c["author"], subject=c["subject"]))
+            for status, path in c["files"]:
+                print("      {status}  {path}".format(status=status, path=path))
+        print()
+
+    if new_files:
+        print("【未提交工作区改动】")
+        for f in new_files:
+            print("  [{status}] {path}".format(status=f["status"], path=f["path"]))
+        print()
+
+    print("—— 检查完写回标记（AI 用）——")
+    for c in commit_detail:
+        print("  mark --commit {hash}".format(hash=c["hash"]))
+    for f in new_files:
+        print("  mark --file {path}:{h}".format(path=f["path"], h=f["content_hash"]))
 
 
 def cmd_mark(args):
@@ -403,6 +415,7 @@ def main():
     p_scan.add_argument("--since", default=None,
                         help="只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago")
     p_scan.add_argument("--json", action="store_true", help="JSON 输出")
+    p_scan.add_argument("--quiet", action="store_true", help="只输出待查数量一行")
     p_scan.add_argument("--baseline", action="store_true",
                         help="首次使用建基线：把当前全部历史 commit 标记为已检查，"
                              "之后只查基线后新出现的 commit + 未提交工作区改动")

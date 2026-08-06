@@ -35,11 +35,11 @@ SQLite 已查记录 ┘
 `{技能目录}/scripts/code_check.py`，Python 标准库 sqlite3，零第三方依赖。
 
 ```bash
-python "{技能目录}/scripts/code_check.py" scan [--author 姓名] [--json]   # 扫描待检查改动
-python "{技能目录}/scripts/code_check.py" scan --baseline                   # 首次使用建基线（老仓库推荐）
-python "{技能目录}/scripts/code_check.py" mark --commit <hash> ...        # 标记 commit 已检查
-python "{技能目录}/scripts/code_check.py" mark --file <路径>:<内容hash> ... # 标记文件已检查
-python "{技能目录}/scripts/code_check.py" status                          # 查看进度
+python "{技能目录}/scripts/code_check.py" scan [--author 姓名] [--json] [--quiet]   # 扫描待检查改动
+python "{技能目录}/scripts/code_check.py" scan --baseline                            # 首次使用建基线（老仓库推荐）
+python "{技能目录}/scripts/code_check.py" mark --commit <hash> ...                 # 标记 commit 已检查
+python "{技能目录}/scripts/code_check.py" mark --file <路径>:<内容hash> ...         # 标记文件已检查
+python "{技能目录}/scripts/code_check.py" status                                   # 查看进度
 ```
 
 **首次使用老仓库（几千 commit）必加 `--baseline`**：把当前全部历史 commit 标记为已检查，
@@ -62,10 +62,8 @@ python "{技能目录}/scripts/code_check.py" scan
 
 **可选**：只查自己提交加 `--author="胡志伟"`（对照 `git log --format="%an"` 里的实际作者名）。
 
-脚本输出三块：
-1. 已提交的新 commit（hash、时间、作者、说明、改动文件）
-2. 未提交工作区改动（标注「新增 / 已查过」）
-3. 每个待查项对应的 mark 命令
+脚本输出精简为：待查数量一行 → commit 列表（hash/时间/说明/改动文件）→ 工作区改动 → 末尾 mark 命令块（AI 用）。
+`--quiet` 只输出「N commit / M 文件待查」一行，供快速判断。
 
 **全部标「已查过」且无新 commit → 直接报告"无新改动"，结束。**
 
@@ -92,24 +90,28 @@ python "{技能目录}/scripts/code_check.py" scan
 
 ### 第 4 步：输出检查报告
 
-对话中按以下格式列出（不写文件，除非用户要求）：
+对话中按下面格式列出（不写文件，除非用户要求）。**结论置顶**，隐患按严重度分组、每条一句话说清「位置+问题+改法」，让用户一眼看出有没有事、要不要动手：
 
 ```
 ## code-check 报告 — {repo}
 
-### 🆕 新 commit（N 个）
-- [{short_hash}] {时间} {说明}
-  - [性能] {文件}:{行号} 循环内逐条查库 → 改批量 IN 查询
-  - [注入] {文件}:{行号} ${xxx} 拼接 → 改 #{xxx}
-  - ✅ {文件}:{行号} 无问题
+结论：查 {N} 个 commit + {M} 个工作区文件。⚠️ 需处理 {Y} 个，🔶 待确认 {Z} 个，其余 ✅。
+{一句话总评，如「无紧急问题，可正常使用」或「有高风险需立即处理」}
 
-### 📝 工作区新增改动（N 个）
-- {文件}
-  - ...
+### ⚠️ 需处理（{Y}）
+- `{文件}:{行号}` —— 一句话问题
+  - 为什么是问题：...
+  - 怎么改：...
 
-### 结论
-- 发现 X 个隐患（Y 个需立即处理 / Z 个待确认）
-- 建议：...
+### 🔶 待确认（{Z}）
+- `{文件}:{行号}` —— 问题 + 不确定点
+
+### ✅ 通过
+- [{short_hash}] {说明} —— 一句话
+- {文件} —— 一句话
+
+### 建议下一步
+- ...
 ```
 
 ### 第 5 步：标记已检查 → 写回 SQLite 🔴 必须
