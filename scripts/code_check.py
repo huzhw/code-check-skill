@@ -25,6 +25,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -90,6 +91,19 @@ def now():
 
 
 # ---------------- 已提交改动 ----------------
+
+def normalize_since(since):
+    """归一化 --since：git 对纯日期/today 解析有坑，自动补具体时间。
+
+    Windows 下 git 把 `today`、`2026-08-06` 这类无时间值解析成"明天"，
+    导致 --since 直接漏掉当天所有提交。补 " 00:00" 后恢复正确语义。
+    """
+    if not since:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", since) or since in ("today", "yesterday", "tomorrow"):
+        return since + " 00:00"
+    return since
+
 
 def list_commits(root, author=None, since=None):
     """全部非 merge 提交。返回 [{hash, time, author, subject}]。"""
@@ -207,7 +221,7 @@ def cmd_scan(args):
     conn = init_db(db_path)
 
     # 1. 已提交的新 commit
-    commits = list_commits(root, author=args.author, since=args.since)
+    commits = list_commits(root, author=args.author, since=normalize_since(args.since))
     new_commits = filter_new_commits(conn, rid, commits)
     commit_detail = []
     for c in new_commits:

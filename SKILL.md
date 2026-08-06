@@ -141,6 +141,7 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 |------|------|
 | `git amend` / `rebase` 改 hash | 脚本按「commit_time + subject」二次兜底去重，已查过的不重查 |
 | 首次使用全量检查量大 | 加 `--since="today"`（或具体日期）只查该时间后的提交，可叠加 `--author` 只查自己的；几年前的提交不碰 |
+| git 对纯日期/today 解析有坑 | Windows 下 `--since` 只写 `today`/`2026-08-06` 会被 git 误解析成「明天」漏查；脚本已自动补 ` 00:00` 归一化，正常写即可 |
 | 出现破坏性操作（删文件/SQL 清表/无条件删改） | 必须列出数据影响范围和能否恢复；拿不准标「待确认」，不许直接放行 |
 | 非 git 目录运行 | 脚本报错 `fatal: not a git repository`，不生成库 |
 | 检查到一半中断 | 已标记的才生效，未标记的下次重查，幂等 |
