@@ -44,7 +44,9 @@
 
 **检查次数**：每个 commit/文件记录被检查次数，`mark` 首次=1、重复 +1。重要需求用 `recheck` 多查几轮，简单需求一次就够。
 
-## 检查清单（按改动类型套用）
+## 检查什么（11 个维度，只查本次改动）
+
+只对**本次 diff 实际改动的代码**逐维度检查，不查没碰过的历史代码。按改动类型套用下面维度：
 
 | 维度 | 检查点 | 典型隐患 |
 |------|--------|---------|
@@ -95,9 +97,19 @@ python ~/.claude/skills/code-check/scripts/code_check.py recheck --since today  
 python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看检查次数/库记录
 ```
 
-## 输出报告（结论置顶、按严重度分组）
+## 报告文件
 
-检查完 AI 用 `report-path` 生成路径，把完整报告写入被检查项目 `.code-check-reports/` 目录（文件名带日期、时间、commit id），对话只留一行摘要。报告内容格式如下：
+检查完的完整报告**写入文件**，对话只留一行摘要，不刷屏。
+
+| 项 | 说明 |
+|----|------|
+| 目录 | 被检查项目 git 根下 `.code-check-reports/`（与 `.code-check.db` 同级，不入库） |
+| 文件名 | `日期_时间[_recheck][_commitids][+work].md`，如 `20260806_143000_acd4fef8+work.md`、`20260806_143500_recheck_acd4fef8.md` |
+| 生成 | `report-path --commit <hash>... [--work] [--recheck]` 建目录、算文件名并打印路径，AI 把报告写入 |
+| 撞名 | 同一秒多次检查自动追加 `_2`，不覆盖 |
+| 无新改动 | 不写报告文件，直接结束 |
+
+报告内容（结论置顶、按严重度分组）：
 
 ```
 ## code-check 报告 — {repo}
@@ -134,6 +146,7 @@ python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看�
 | 项 | 说明 |
 |----|------|
 | 库文件 | 被检查项目 git 根目录 `.code-check.db`（不入库） |
+| 报告目录 | 被检查项目 git 根 `.code-check-reports/`（不入库），存检查报告 |
 | `checked_commits` | repo + commit_hash 去重，`check_count` 记录检查次数 |
 | `checked_files` | repo + file_path + content_hash 去重，`check_count` 记录检查次数 |
 
