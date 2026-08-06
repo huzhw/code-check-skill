@@ -9,8 +9,10 @@ code-check 增量代码检查脚本
 三张表两张，一张按 commit 去重（已提交），一张按文件内容 hash 去重（未提交工作区改动）。
 
 命令：
-    python code_check.py scan [--author 姓名] [--json]
+    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--baseline]
         扫描待检查改动：已提交新 commit + 未提交工作区改动，输出清单。
+        --since：只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago。
+        --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
     python code_check.py mark [--commit <hash>]... [--file <路径>:<内容hash>]...
         标记已检查，写回 SQLite。
     python code_check.py status
@@ -222,6 +224,20 @@ def cmd_scan(args):
 
     # 1. 已提交的新 commit
     commits = list_commits(root, author=args.author, since=normalize_since(args.since))
+    if args.baseline:
+        # 首次使用建基线：当前全部历史 commit（跟随 --author/--since 过滤）标记为已检查，
+        # 之后 scan 只报基线后新出现的 commit + 未提交工作区改动，
+        # 避免老仓库首次全量把上千 commit 全列为待查
+        stamp = now()
+        conn.executemany(
+            "INSERT OR IGNORE INTO checked_commits"
+            "(repo, commit_hash, commit_time, author, subject, checked_at)"
+            "VALUES (?,?,?,?,?,?)",
+            [(rid, c["hash"], c["time"], c["author"], c["subject"], stamp)
+             for c in commits])
+        conn.commit()
+        if not args.json:
+            print("📌 已建立基线：标记 {} 个历史 commit 为已检查".format(len(commits)))
     new_commits = filter_new_commits(conn, rid, commits)
     commit_detail = []
     for c in new_commits:
@@ -387,6 +403,9 @@ def main():
     p_scan.add_argument("--since", default=None,
                         help="只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago")
     p_scan.add_argument("--json", action="store_true", help="JSON 输出")
+    p_scan.add_argument("--baseline", action="store_true",
+                        help="首次使用建基线：把当前全部历史 commit 标记为已检查，"
+                             "之后只查基线后新出现的 commit + 未提交工作区改动")
 
     p_mark = sub.add_parser("mark", help="标记已检查")
     p_mark.add_argument("--commit", action="append", default=[],
