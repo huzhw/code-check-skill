@@ -41,6 +41,7 @@ python "{技能目录}/scripts/code_check.py" baseline                          
 python "{技能目录}/scripts/code_check.py" mark --commit <hash> ...                 # 标记 commit 已检查（重复标记次数+1）
 python "{技能目录}/scripts/code_check.py" mark --file <路径>:<内容hash> ...         # 标记文件已检查
 python "{技能目录}/scripts/code_check.py" status                                   # 查看库记录数与检查次数
+python "{技能目录}/scripts/code_check.py" report-path [--commit <hash>]... [--work] [--recheck]   # 建报告目录并打印报告文件路径（AI 写内容）
 ```
 
 **检查次数（check_count）**：每个 commit/工作区文件记录被检查次数。`mark` 首次=1，重复标记 +1。
@@ -100,9 +101,17 @@ python "{技能目录}/scripts/code_check.py" scan
 
 **每种隐患必须给出**：`文件:行号` + 隐患类型 + 为什么是问题 + 改法建议。**拿不准的标注「待确认」，不许胡编。**
 
-### 第 4 步：输出检查报告
+### 第 4 步：输出检查报告 → 写入报告文件
 
-对话中按下面格式列出（不写文件，除非用户要求）。**结论置顶**，隐患按严重度分组、每条一句话说清「位置+问题+改法」，让用户一眼看出有没有事、要不要动手：
+完整报告**写入文件**（不刷屏对话），对话只留一行摘要。**结论置顶**，隐患按严重度分组、每条一句话说清「位置+问题+改法」，让用户一眼看出有没有事、要不要动手：
+
+1. 取报告路径：`python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path --commit <hash>... [--work] [--recheck]`
+   - `--commit`：本次检查的所有 commit 短 hash，可多个；本次含工作区改动加 `--work`；重查加 `--recheck`
+   - 脚本在 `<仓库git根>/.code-check-reports/`（与 .code-check.db 同级）建目录，按「日期_时间[_recheck][_commitids][+work]」自动命名（如 `20260806_143000_acd4fef8+work.md`），撞名自动追加 `_2`，打印出目标路径
+2. 用 Write 工具把下面格式的完整报告写到该路径（用第 1 步打印的绝对路径）
+3. 对话只输出一行：`📄 报告：{路径}` + 结论行（如「⚠️ 需处理 2 个，无紧急」）
+
+**无新改动**（scan 报「没有新改动」）：不写报告文件，直接结束。
 
 ```
 ## code-check 报告 — {repo}
@@ -173,6 +182,7 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 | 非 git 目录运行 | 脚本报错 `fatal: not a git repository`，不生成库 |
 | 检查到一半中断 | 已标记的才生效，未标记的下次重查，幂等 |
 | DB 文件被 git 追踪 | 该 skill 目录 .gitignore 已含 `*.db`；被检查项目需自行确保 `.code-check.db` 不入库 |
+| 报告目录被 git 追踪 | `.code-check-reports/` 与 `.code-check.db` 同待遇：写报告前确认项目 `.gitignore` 含 `.code-check-reports/`，不入库 |
 
 ---
 
@@ -181,6 +191,7 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 - 🔴 **禁止重复检查已查过的提交** — 先 scan 看差集，标记写回后再 scan 确认
 - 🔴 **禁止循环内重复执行 git/查库** — 改动批量提取一次，内存里处理
 - 🔴 **禁止不标记直接结束** — 检查完必须 mark 写回，否则下次全量重查
+- 🔴 **禁止有改动却不写报告文件** — 有内容可查时，必须 report-path 取路径 + Write 落盘，对话只留摘要；无新改动可不写
 - 禁止对拿不准的隐患瞎报——标注「待确认」，让用户自己判断
 - 禁止检查范围外顺手改代码——只报隐患，不改代码（除非用户明确要求）
 - 禁止把其他同事的提交当自己的查——需要时用 `--author` 过滤

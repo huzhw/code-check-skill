@@ -23,6 +23,8 @@ code-check 增量代码检查脚本
         标记已检查，写回 SQLite（重复标记次数 +1）。
     python code_check.py status
         查看库记录数与检查次数。
+    python code_check.py report-path [--commit <hash>]... [--work] [--recheck]
+        建报告目录 `.code-check-reports/` 并打印报告文件路径（日期_时间[+commitids][+work]），AI 写内容。
 
 库位置：被检查项目 git 根目录下 `.code-check.db`（该文件加入 .gitignore，不入库）。
 repo 标识：git remote origin 地址优先，无 remote 用绝对路径。
@@ -39,6 +41,7 @@ import subprocess
 import sys
 
 DB_FILENAME = ".code-check.db"
+REPORT_DIR_NAME = ".code-check-reports"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS checked_commits (
     repo        TEXT NOT NULL,
@@ -573,6 +576,38 @@ def cmd_status(args):
     conn.close()
 
 
+def cmd_report_path(args):
+    """建报告目录 + 算报告文件名，打印目标路径。AI 负责写报告内容。
+
+    文件名：日期_时间[_recheck][_commitids][+work].md，如 20260806_143000_acd4fef8+work.md。
+    撞名自动追加 _2/_3，避免同秒多次检查互相覆盖。无内容可报时（无 commit 也无工作区改动）报错不建。
+    """
+    root = repo_root(args.repo_dir)
+    if not args.commit and not args.work:
+        print("❌ 无可报告内容：需 --commit 或 --work（无新改动不写报告文件）", file=sys.stderr)
+        return
+    report_dir = os.path.join(root, REPORT_DIR_NAME)
+    os.makedirs(report_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = ts
+    if args.recheck:
+        name += "_recheck"
+    hashes = [h[:7] for h in args.commit]
+    if len(hashes) > 3:
+        hashes = hashes[:3] + ["共{}个".format(len(args.commit))]
+    if hashes:
+        name += "_" + "-".join(hashes)
+    if args.work:
+        name += "+work"
+    path = os.path.join(report_dir, name + ".md")
+    base, ext = os.path.splitext(path)
+    counter = 2
+    while os.path.exists(path):
+        path = "{}_{}{}".format(base, counter, ext)
+        counter += 1
+    print(path)
+
+
 # ---------------- 入口 ----------------
 
 def main():
@@ -621,6 +656,12 @@ def main():
 
     sub.add_parser("status", help="查看库记录数与检查次数")
 
+    p_report = sub.add_parser("report-path", help="建报告目录并打印报告文件路径（AI 写内容）")
+    p_report.add_argument("--commit", action="append", default=[],
+                          help="本次检查的 commit 短hash，可多次")
+    p_report.add_argument("--work", action="store_true", help="本次含工作区改动")
+    p_report.add_argument("--recheck", action="store_true", help="重查报告，文件名加 recheck_ 前缀")
+
     args = parser.parse_args()
     if args.command == "scan":
         cmd_scan(args)
@@ -632,6 +673,8 @@ def main():
         cmd_mark(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "report-path":
+        cmd_report_path(args)
     else:
         parser.print_help()
 
