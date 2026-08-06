@@ -35,7 +35,7 @@
 # 1. 扫描增量改动（差集）
 python scripts/code_check.py scan
 
-# 2. AI 逐项检查隐患（性能/注入/健壮性/并发/方言兼容/前端/事务）
+# 2. AI 逐项检查隐患（性能/注入/健壮性/并发/方言兼容/前端/事务/破坏性操作/敏感信息/路径安全）
 
 # 3. 检查完标记写回，下次不再重查
 python scripts/code_check.py mark --commit <hash> --file "src/a.java:<hash>"

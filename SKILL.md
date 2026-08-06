@@ -79,6 +79,9 @@ python "{技能目录}/scripts/code_check.py" scan
 | **方言兼容** | 达梦/国产库 ROWNUM、分页、关键字、双引号、与 Oracle/MySQL 差异 | 分页写法不兼容、保留字当列名 |
 | **前端** | XSS、危险标签、v-html、无 key、内存泄漏 | 注入 HTML、循环无 key |
 | **事务** | 批量操作无事务、提交过早、脏读 | 半途失败数据不一致 |
+| **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、覆盖写无备份 | `rm -rf`/`os.remove`/`File.delete`、`DROP TABLE`/`TRUNCATE`/`DELETE FROM` 无 WHERE、覆盖不备份 |
+| **敏感信息** | 硬编码密钥/口令、日志打印密码/token、.env/证书入库 | API key 写死、log 打 token、`git add .` 带上 .env |
+| **路径安全** | **解压/写入未在临时目录内加随机子目录隔离**、上传文件名拼接、解压路径穿越、符号链接 | **解压直接落临时目录根、`../` 逃逸出子目录**、`new File(dir+name)`、软链指向外部目录 |
 
 **每种隐患必须给出**：`文件:行号` + 隐患类型 + 为什么是问题 + 改法建议。**拿不准的标注「待确认」，不许胡编。**
 
@@ -138,6 +141,7 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 |------|------|
 | `git amend` / `rebase` 改 hash | 脚本按「commit_time + subject」二次兜底去重，已查过的不重查 |
 | 首次使用全量检查量大 | 首次必全量，之后增量；可加 `--author` 只查自己的 |
+| 出现破坏性操作（删文件/SQL 清表/无条件删改） | 必须列出数据影响范围和能否恢复；拿不准标「待确认」，不许直接放行 |
 | 非 git 目录运行 | 脚本报错 `fatal: not a git repository`，不生成库 |
 | 检查到一半中断 | 已标记的才生效，未标记的下次重查，幂等 |
 | DB 文件被 git 追踪 | 该 skill 目录 .gitignore 已含 `*.db`；被检查项目需自行确保 `.code-check.db` 不入库 |
