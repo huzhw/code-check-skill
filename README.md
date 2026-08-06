@@ -24,9 +24,11 @@
 - **范围首查** — 只查今天提交（`scan --since today`）、从某提交起（`scan --from <commitId>`）
 - **重查** — `recheck` 二次/多次分析，怕一次检查不准时用
 - **刷库建基线** — `baseline` 老仓库一次性归档全部历史，不实际检查
+- **数据表操作清单** — 报告列出本次 diff 实际涉及的库·表·操作，核对表名没写错库、拼错、张冠李戴
 - **多项目隔离** — `repo` 字段区分仓库，各项目检查进度互不影响
 - **已提交 + 未提交全覆盖** — 新 commit 和未提交的工作区改动都查
 - **amend/rebase 免疫** — hash 变了按「时间+提交说明」兜底去重，不重查
+- **报告落盘** — 完整报告写入被检查项目 `.code-check-reports/` 目录，文件名带日期、时间、commit id
 - **零依赖** — Python 标准库 sqlite3，不用装包
 
 ## 命令族（同仓库 6 个 skill）
@@ -42,6 +44,24 @@
 
 **检查次数**：每个 commit/文件记录被检查次数，`mark` 首次=1、重复 +1。重要需求用 `recheck` 多查几轮，简单需求一次就够。
 
+## 检查清单（按改动类型套用）
+
+| 维度 | 检查点 | 典型隐患 |
+|------|--------|---------|
+| **性能** | 循环内查库/HTTP、N+1 查询、大表无索引、全表扫描 | 逐条查库、无分页、子查询失控 |
+| **注入安全** | SQL 拼接 `${}`、未用 `#{}`、字符串拼 SQL、路径拼 | SQL 注入、路径遍历 |
+| **健壮性** | 空指针、类型转换、资源未关闭、异常吞掉、边界值 | NPE、连接泄漏、空集合 |
+| **并发** | 共享可变状态、线程安全、锁范围 | 静态变量并发、并发修改 |
+| **方言兼容** | 达梦/国产库 ROWNUM、分页、关键字、双引号、与 Oracle/MySQL 差异 | 分页写法不兼容、保留字当列名 |
+| **前端** | XSS、危险标签、v-html、无 key、内存泄漏 | 注入 HTML、循环无 key |
+| **事务** | 批量操作无事务、提交过早、脏读 | 半途失败数据不一致 |
+| **数据表操作** | diff 里每处 SQL 涉及的库（schema）+ 表名 + 操作类型 | 表名写错库、表名拼错、张冠李戴 |
+| **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、覆盖写无备份 | `rm -rf`、`DROP TABLE`/`TRUNCATE`、`DELETE` 无 WHERE、覆盖不备份 |
+| **敏感信息** | 硬编码密钥/口令、日志打印密码/token、.env/证书入库 | API key 写死、log 打 token |
+| **路径安全** | 解压/写入未隔离、上传文件名拼接、解压路径穿越、符号链接 | 解压落临时目录根、`../` 逃逸、软链指向外部 |
+
+每种隐患必须给出：`文件:行号` + 隐患类型 + 为什么是问题 + 改法建议；拿不准标「待确认」，不胡编。逐维度的完整执行细则见 `SKILL.md`。
+
 ## 触发词
 
 代码检查、检查代码、隐患检查、code-check、增量检查；家族子技能各自有 today / from / recheck / baseline 触发词。
@@ -50,15 +70,63 @@
 
 ```bash
 # 1. 扫描（首查全范围；只查今天加 --since today；从某提交起加 --from <commitId>）
-python scripts/code_check.py scan
+python ~/.claude/skills/code-check/scripts/code_check.py scan
 
-# 2. AI 逐项检查隐患（性能/注入/健壮性/并发/方言兼容/前端/事务/破坏性操作/敏感信息/路径安全）
+# 2. AI 逐项检查隐患（见上面检查清单 11 个维度）
 
 # 3. 检查完标记写回（重复标记次数+1），下次不再重查
-python scripts/code_check.py mark --commit <hash> --file "src/a.java:<hash>"
+python ~/.claude/skills/code-check/scripts/code_check.py mark --commit <hash> --file "src/a.java:<hash>"
 
 # 4. 想二次检查：recheck --since today / recheck --from <commitId>
-# 5. 老仓库首次刷库：baseline
+# 5. 查看库记录与检查次数：status
+# 6. 老仓库首次刷库：baseline
+```
+
+**一次完整使用**：
+
+```bash
+cd /path/to/project                    # 进入被检查的 git 仓库
+python ~/.claude/skills/code-check/scripts/code_check.py scan         # 1. 扫描出待查 commit + 工作区改动
+#   → AI 逐项读 diff、按检查清单报隐患（文件:行号 + 问题 + 改法）
+python ~/.claude/skills/code-check/scripts/code_check.py report-path --commit abc123 --work   # 2. 生成报告文件路径（AI 写完整报告到 .code-check-reports/ 下）
+python ~/.claude/skills/code-check/scripts/code_check.py mark --commit abc123 --file "src/a.java:<hash>"   # 3. 标记已检查
+python ~/.claude/skills/code-check/scripts/code_check.py scan --quiet  # 4. 复查应显示"没有新改动"
+python ~/.claude/skills/code-check/scripts/code_check.py recheck --since today   # 5. 重要需求再查一遍，次数 +1
+python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看检查次数/库记录
+```
+
+## 输出报告（结论置顶、按严重度分组）
+
+检查完 AI 用 `report-path` 生成路径，把完整报告写入被检查项目 `.code-check-reports/` 目录（文件名带日期、时间、commit id），对话只留一行摘要。报告内容格式如下：
+
+```
+## code-check 报告 — {repo}
+
+结论：查 {N} 个 commit + {M} 个工作区文件。⚠️ 需处理 {Y} 个，🔶 待确认 {Z} 个，其余 ✅。
+{一句话总评，如「无紧急问题，可正常使用」或「有高风险需立即处理」}
+
+### 🗄️ 数据表操作清单（本次改动涉及的库·表·操作）
+| 库/SCHEMA | 表名 | 操作 | 来源 |
+|---|---|---|---|
+| AI_AUDIT | push_archive_json_log | INSERT | {文件}:{行号} |
+| DG_V5 | T_XY_CMS_CATALOG_FC | SELECT | {文件}:{行号} |
+
+规则：只列本次 diff 实际 SQL 涉及的表；库名 = SQL 里 schema 前缀或 datasource 归属，无前缀标「本库」；操作按 INSERT/UPDATE/DELETE/SELECT，批量/循环标注。用途是核对表名有没有写错库、拼错、张冠李戴。
+
+### ⚠️ 需处理（{Y}）
+- `{文件}:{行号}` —— 一句话问题
+  - 为什么是问题：...
+  - 怎么改：...
+
+### 🔶 待确认（{Z}）
+- `{文件}:{行号}` —— 问题 + 不确定点
+
+### ✅ 通过
+- [{short_hash}] {说明} —— 一句话
+- {文件} —— 一句话
+
+### 建议下一步
+- ...
 ```
 
 ## 数据存储
@@ -68,6 +136,32 @@ python scripts/code_check.py mark --commit <hash> --file "src/a.java:<hash>"
 | 库文件 | 被检查项目 git 根目录 `.code-check.db`（不入库） |
 | `checked_commits` | repo + commit_hash 去重，`check_count` 记录检查次数 |
 | `checked_files` | repo + file_path + content_hash 去重，`check_count` 记录检查次数 |
+
+## 回滚 / 重置进度
+
+想强制重新检查：删除 `.code-check.db` 里的已查记录，下次 `scan` 即全量重查：
+
+```bash
+python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE FROM checked_commits');c.execute('DELETE FROM checked_files');c.commit()"
+```
+
+（仅对当前项目库；`git amend`/`rebase` 改 hash 有「时间+提交说明」兜底，不会误重查。）
+
+## 仓库结构 / 维护
+
+```text
+code-check/
+├── SKILL.md               # 主技能：完整检查流程 + 检查清单（给 AI 看）
+├── scripts/code_check.py  # 唯一脚本，6 个 skill 共用（Python 标准库，零依赖）
+├── code-check-today/      # 子技能：只查今天
+├── code-check-from/       # 子技能：从某提交起查
+├── code-recheck-today/    # 子技能：重查今天
+├── code-recheck-from/     # 子技能：从某提交起重查
+├── code-check-history/    # 子技能：刷库建基线
+└── JUNCTION说明.md          # 全局 skill 目录 junction 双向同步说明
+```
+
+**维护**：仓库与全局 `~/.claude/skills/code-check*` 是 junction（双向同步），日常只改本仓库、提交推送即可，全局自动生效，不用手动复制。详见 `JUNCTION说明.md`。
 
 ## 安装
 
