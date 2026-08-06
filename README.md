@@ -9,6 +9,7 @@
 - [daily-record](https://github.com/huzhw/daily-record-skill) — 日报记录
 - [daily-merge](https://github.com/huzhw/daily-merge-skill) — 日报合并
 - [reread-claude-md](https://github.com/huzhw/reread-claude-md-skill) — 重新加载 CLAUDE.md 规则
+- [service-manager](https://github.com/huzhw/service-manager)：桌面服务管理工具
 - [token-3000](https://github.com/huzhw/token-3000-skill) — API 一键切换
 
 ---
