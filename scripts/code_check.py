@@ -9,15 +9,20 @@ code-check 增量代码检查脚本
 三张表两张，一张按 commit 去重（已提交），一张按文件内容 hash 去重（未提交工作区改动）。
 
 命令：
-    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--baseline] [--quiet]
-        扫描待检查改动：已提交新 commit + 未提交工作区改动，输出精简清单。
+    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--from 提交id] [--baseline] [--quiet]
+        扫描待检查改动（只列未检查的新项），输出精简清单。
         --since：只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago。
+        --from：从该提交起（含）往后查，如 acd4fef8。
         --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
         --quiet：只输出「N commit / M 文件待查」一行，供快速判断。
+    python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id]
+        重查：列范围内所有项（含已查），每条带「已查 N 次」；check_count 随 mark 递增。
+    python code_check.py baseline [--author 姓名]
+        刷库建基线：全部历史 commit 标记已检查（check_count=0 种子），不实际检查。
     python code_check.py mark [--commit <hash>]... [--file <路径>:<内容hash>]...
-        标记已检查，写回 SQLite。
+        标记已检查，写回 SQLite（重复标记次数 +1）。
     python code_check.py status
-        查看库记录数。
+        查看库记录数与检查次数。
 
 库位置：被检查项目 git 根目录下 `.code-check.db`（该文件加入 .gitignore，不入库）。
 repo 标识：git remote origin 地址优先，无 remote 用绝对路径。
@@ -42,6 +47,7 @@ CREATE TABLE IF NOT EXISTS checked_commits (
     author      TEXT,
     subject     TEXT,
     checked_at  TEXT,
+    check_count INTEGER NOT NULL DEFAULT 1,
     UNIQUE(repo, commit_hash)
 );
 CREATE TABLE IF NOT EXISTS checked_files (
@@ -49,6 +55,7 @@ CREATE TABLE IF NOT EXISTS checked_files (
     file_path    TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     checked_at   TEXT,
+    check_count  INTEGER NOT NULL DEFAULT 1,
     UNIQUE(repo, file_path, content_hash)
 );
 """
@@ -82,9 +89,19 @@ def repo_id(root):
 
 # ---------------- 数据库 ----------------
 
+def ensure_column(conn, table, column, ddl):
+    """旧库缺列时 ALTER 补齐，幂等。"""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info({})".format(table))]
+    if column not in cols:
+        conn.execute("ALTER TABLE {} ADD COLUMN {}".format(table, ddl))
+        conn.commit()
+
+
 def init_db(db_path):
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    ensure_column(conn, "checked_commits", "check_count", "check_count INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "checked_files", "check_count", "check_count INTEGER NOT NULL DEFAULT 1")
     conn.commit()
     return conn
 
@@ -108,10 +125,14 @@ def normalize_since(since):
     return since
 
 
-def list_commits(root, author=None, since=None):
-    """全部非 merge 提交。返回 [{hash, time, author, subject}]。"""
+def list_commits(root, author=None, since=None, from_commit=None):
+    """全部非 merge 提交。返回 [{hash, time, author, subject}]，最新在前。
+    --from 时范围 = 该提交本身 + 之后的新提交（含）。"""
     args = ["log", "--no-merges", "--format=%H\t%aI\t%an\t%s"]
-    if since:
+    if from_commit:
+        # git log A..HEAD 排除 A 本身，故范围取 A 之后，再单独补 A
+        args.append(from_commit + "..HEAD")
+    elif since:
         args.append("--since=" + since)
     if author:
         args.append("--author=" + author)
@@ -122,6 +143,13 @@ def list_commits(root, author=None, since=None):
             continue
         h, t, a, s = line.split("\t", 3)
         commits.append({"hash": h, "time": t, "author": a, "subject": s})
+    if from_commit:
+        # 补上 from_commit 本身（若 author 过滤则校验作者）
+        me = git(root, "log", "-1", "--format=%H\t%aI\t%an\t%s", from_commit).strip()
+        if me:
+            h, t, a, s = me.split("\t", 3)
+            if author is None or author.lower() in a.lower():
+                commits.append({"hash": h, "time": t, "author": a, "subject": s})
     return commits
 
 
@@ -140,6 +168,36 @@ def filter_new_commits(conn, repo, commits):
             continue  # amend/rebase 后 hash 变了，但时间+说明相同 → 已查过
         new.append(c)
     return new
+
+
+def commit_check_count(conn, repo, commit_hash):
+    """某 commit 已检查次数（0=未检查）。"""
+    row = conn.execute(
+        "SELECT check_count FROM checked_commits WHERE repo=? AND commit_hash=?",
+        (repo, commit_hash)).fetchone()
+    return row[0] if row else 0
+
+
+def file_check_count(conn, repo, path, content_hash):
+    """某文件改动已检查次数（0=未检查）。"""
+    row = conn.execute(
+        "SELECT check_count FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
+        (repo, path, content_hash)).fetchone()
+    return row[0] if row else 0
+
+
+def do_baseline(conn, rid, root, author=None):
+    """刷库建基线：全部历史 commit 标记已检查（check_count=0 种子，未实际检查）。返回 commit 数。"""
+    commits = list_commits(root, author=author)
+    stamp = now()
+    for c in commits:
+        conn.execute(
+            "INSERT OR IGNORE INTO checked_commits"
+            "(repo, commit_hash, commit_time, author, subject, checked_at, check_count)"
+            "VALUES (?,?,?,?,?,?,0)",
+            (rid, c["hash"], c["time"], c["author"], c["subject"], stamp))
+    conn.commit()
+    return len(commits)
 
 
 def is_first_commit(root, commit):
@@ -223,22 +281,22 @@ def cmd_scan(args):
     db_path = os.path.join(root, DB_FILENAME)
     conn = init_db(db_path)
 
+    if args.from_commit:
+        try:
+            git(root, "rev-parse", "--verify", "--quiet", args.from_commit)
+        except RuntimeError:
+            print("❌ 提交 id 不存在或非法: {}".format(args.from_commit), file=sys.stderr)
+            return
+
     # 1. 已提交的新 commit
-    commits = list_commits(root, author=args.author, since=normalize_since(args.since))
+    commits = list_commits(root, author=args.author, since=normalize_since(args.since),
+                           from_commit=args.from_commit)
     if args.baseline:
-        # 首次使用建基线：当前全部历史 commit（跟随 --author/--since 过滤）标记为已检查，
-        # 之后 scan 只报基线后新出现的 commit + 未提交工作区改动，
-        # 避免老仓库首次全量把上千 commit 全列为待查
-        stamp = now()
-        conn.executemany(
-            "INSERT OR IGNORE INTO checked_commits"
-            "(repo, commit_hash, commit_time, author, subject, checked_at)"
-            "VALUES (?,?,?,?,?,?)",
-            [(rid, c["hash"], c["time"], c["author"], c["subject"], stamp)
-             for c in commits])
-        conn.commit()
+        # 首次使用建基线：全部历史 commit 标记为已检查（种子，未实际检查），
+        # 之后 scan 只报基线后新出现的 commit + 未提交工作区改动
+        n = do_baseline(conn, rid, root, args.author)
         if not args.json:
-            print("📌 已建立基线：标记 {} 个历史 commit 为已检查".format(len(commits)))
+            print("📌 已建立基线：标记 {} 个历史 commit 为已检查（check_count=0 种子，未实际检查）".format(n))
     new_commits = filter_new_commits(conn, rid, commits)
     commit_detail = []
     for c in new_commits:
@@ -344,12 +402,22 @@ def cmd_mark(args):
             row = (t, a, s)
         except RuntimeError:
             pass
-        conn.execute(
-            "INSERT OR IGNORE INTO checked_commits"
-            "(repo, commit_hash, commit_time, author, subject, checked_at)"
-            "VALUES (?,?,?,?,?,?)",
-            (rid, h, row[0] if row else "", row[1] if row else "",
-             row[2] if row else "", now()))
+        exists = conn.execute(
+            "SELECT 1 FROM checked_commits WHERE repo=? AND commit_hash=?",
+            (rid, h)).fetchone()
+        if exists:
+            # 重复标记 → 次数 +1（重查）
+            conn.execute(
+                "UPDATE checked_commits SET check_count = check_count + 1, checked_at = ? "
+                "WHERE repo=? AND commit_hash=?",
+                (now(), rid, h))
+        else:
+            conn.execute(
+                "INSERT INTO checked_commits"
+                "(repo, commit_hash, commit_time, author, subject, checked_at, check_count)"
+                "VALUES (?,?,?,?,?,?,1)",
+                (rid, h, row[0] if row else "", row[1] if row else "",
+                 row[2] if row else "", now()))
         n_commit += 1
 
     n_file = 0
@@ -358,16 +426,118 @@ def cmd_mark(args):
             print("⚠ 跳过非法 --file 参数: {}".format(spec), file=sys.stderr)
             continue
         path, h = spec.rsplit(":", 1)
-        conn.execute(
-            "INSERT OR IGNORE INTO checked_files"
-            "(repo, file_path, content_hash, checked_at)"
-            "VALUES (?,?,?,?)",
-            (rid, path, h, now()))
+        exists = conn.execute(
+            "SELECT 1 FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
+            (rid, path, h)).fetchone()
+        if exists:
+            conn.execute(
+                "UPDATE checked_files SET check_count = check_count + 1, checked_at = ? "
+                "WHERE repo=? AND file_path=? AND content_hash=?",
+                (now(), rid, path, h))
+        else:
+            conn.execute(
+                "INSERT INTO checked_files"
+                "(repo, file_path, content_hash, checked_at, check_count)"
+                "VALUES (?,?,?,?,1)",
+                (rid, path, h, now()))
         n_file += 1
 
     conn.commit()
     conn.close()
     print("✅ 已标记: {} 个 commit，{} 个文件".format(n_commit, n_file))
+
+
+def cmd_recheck(args):
+    """重查：列范围内所有项（含已查），每条带「已查 N 次」。未指定范围则报错提示。"""
+    root = repo_root(args.repo_dir)
+    rid = repo_id(root)
+    db_path = os.path.join(root, DB_FILENAME)
+    conn = init_db(db_path)
+
+    if not args.since and not args.from_commit:
+        print("❌ recheck 需指定范围：--since 时间 或 --from 提交id（如 recheck --since today）",
+              file=sys.stderr)
+        return
+    if args.from_commit:
+        try:
+            git(root, "rev-parse", "--verify", "--quiet", args.from_commit)
+        except RuntimeError:
+            print("❌ 提交 id 不存在或非法: {}".format(args.from_commit), file=sys.stderr)
+            return
+
+    commits = list_commits(root, author=args.author, since=normalize_since(args.since),
+                           from_commit=args.from_commit)
+    commit_rows = []
+    for c in commits:
+        try:
+            files = commit_changed_files(root, c["hash"])
+        except RuntimeError:
+            files = []
+        commit_rows.append({
+            "hash": c["hash"], "time": c["time"], "author": c["author"],
+            "subject": c["subject"], "files": files,
+            "count": commit_check_count(conn, rid, c["hash"]),
+        })
+
+    try:
+        wfiles = working_changed_files(root)
+    except RuntimeError:
+        wfiles = []
+    work_rows = []
+    for status, path in wfiles:
+        if status in ("D",):
+            continue
+        if os.path.basename(path) == DB_FILENAME:
+            continue
+        h = file_content_hash(root, path)
+        if h is None:
+            continue
+        work_rows.append({"status": status, "path": path,
+                          "content_hash": h, "count": file_check_count(conn, rid, path, h)})
+
+    print("=" * 50)
+    print("code-check 重查：{}".format(os.path.basename(os.path.normpath(root))))
+    print("=" * 50)
+    print("范围：{} 个 commit，{} 个工作区文件".format(len(commit_rows), len(work_rows)))
+    if not commit_rows and not work_rows:
+        print("该范围内无改动。")
+        return
+    print()
+
+    if commit_rows:
+        print("【commit（已查 N 次，0=新）】")
+        for c in commit_rows:
+            t = c["time"][5:16].replace("T", " ")
+            print("  [{short}] {time} {author}  {subject}  （已查 {cnt} 次）".format(
+                short=c["hash"][:7], time=t, author=c["author"],
+                subject=c["subject"], cnt=c["count"]))
+            for status, path in c["files"]:
+                print("      {status}  {path}".format(status=status, path=path))
+        print()
+
+    if work_rows:
+        print("【工作区文件（已查 N 次，0=新）】")
+        for f in work_rows:
+            print("  [{status}] {path}  （已查 {cnt} 次）".format(
+                status=f["status"], path=f["path"], cnt=f["count"]))
+        print()
+
+    print("—— 检查完写回标记（AI 用），重复 mark 次数 +1 ——")
+    for c in commit_rows:
+        print("  mark --commit {hash}".format(hash=c["hash"]))
+    for f in work_rows:
+        print("  mark --file {path}:{h}".format(path=f["path"], h=f["content_hash"]))
+
+
+def cmd_baseline(args):
+    """刷库建基线：全部历史 commit 标记已检查（check_count=0 种子），不实际检查。"""
+    root = repo_root(args.repo_dir)
+    rid = repo_id(root)
+    db_path = os.path.join(root, DB_FILENAME)
+    conn = init_db(db_path)
+    n = do_baseline(conn, rid, root, args.author)
+    print("📌 已建立基线：标记 {} 个历史 commit 为已检查（check_count=0 种子，未实际检查）".format(n))
+    conn.close()
 
 
 def cmd_status(args):
@@ -380,14 +550,25 @@ def cmd_status(args):
     conn = init_db(db_path)
     n_commit = conn.execute(
         "SELECT COUNT(*) FROM checked_commits WHERE repo=?", (rid,)).fetchone()[0]
+    n_commit_real = conn.execute(
+        "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND check_count>=1",
+        (rid,)).fetchone()[0]
+    n_commit_multi = conn.execute(
+        "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND check_count>=2",
+        (rid,)).fetchone()[0]
     n_file = conn.execute(
         "SELECT COUNT(*) FROM checked_files WHERE repo=?", (rid,)).fetchone()[0]
+    n_file_real = conn.execute(
+        "SELECT COUNT(*) FROM checked_files WHERE repo=? AND check_count>=1",
+        (rid,)).fetchone()[0]
     last = conn.execute(
         "SELECT MAX(checked_at) FROM checked_commits").fetchone()[0]
     print("repo      :", rid)
     print("db        :", db_path)
-    print("已检查 commit: {} 条".format(n_commit))
-    print("已检查文件改动: {} 条".format(n_file))
+    print("已标记 commit: {} 条（种子0次 {} 条，实际检查≥1次 {} 条）".format(
+        n_commit, n_commit - n_commit_real, n_commit_real))
+    print("  其中重复检查≥2次: {} 条".format(n_commit_multi))
+    print("已标记文件改动: {} 条（实际检查≥1次 {} 条）".format(n_file, n_file_real))
     print("最近检查时间 :", last or "无")
     conn.close()
 
@@ -410,27 +591,43 @@ def main():
         help="git 仓库目录，默认当前目录")
     sub = parser.add_subparsers(dest="command")
 
-    p_scan = sub.add_parser("scan", help="扫描待检查改动")
+    p_scan = sub.add_parser("scan", help="扫描待检查改动（只列未检查的新项）")
     p_scan.add_argument("--author", default=None, help="只查该作者的提交")
     p_scan.add_argument("--since", default=None,
                         help="只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago")
+    p_scan.add_argument("--from", dest="from_commit", default=None,
+                        help="从该提交起（含）往后查，如 acd4fef8")
     p_scan.add_argument("--json", action="store_true", help="JSON 输出")
     p_scan.add_argument("--quiet", action="store_true", help="只输出待查数量一行")
     p_scan.add_argument("--baseline", action="store_true",
                         help="首次使用建基线：把当前全部历史 commit 标记为已检查，"
                              "之后只查基线后新出现的 commit + 未提交工作区改动")
 
-    p_mark = sub.add_parser("mark", help="标记已检查")
+    p_recheck = sub.add_parser("recheck", help="重查：列范围内所有项（含已查）带次数")
+    p_recheck.add_argument("--author", default=None, help="只查该作者的提交")
+    p_recheck.add_argument("--since", default=None,
+                           help="只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago")
+    p_recheck.add_argument("--from", dest="from_commit", default=None,
+                           help="从该提交起（含）往后查，如 acd4fef8")
+
+    p_baseline = sub.add_parser("baseline", help="刷库建基线：标记全部历史 commit，不检查")
+    p_baseline.add_argument("--author", default=None, help="只标记该作者的提交")
+
+    p_mark = sub.add_parser("mark", help="标记已检查（重复标记次数 +1）")
     p_mark.add_argument("--commit", action="append", default=[],
                         help="标记 commit 已检查，可多次")
     p_mark.add_argument("--file", action="append", default=[],
                         help="标记文件已检查，格式 路径:内容hash，可多次")
 
-    sub.add_parser("status", help="查看进度")
+    sub.add_parser("status", help="查看库记录数与检查次数")
 
     args = parser.parse_args()
     if args.command == "scan":
         cmd_scan(args)
+    elif args.command == "recheck":
+        cmd_recheck(args)
+    elif args.command == "baseline":
+        cmd_baseline(args)
     elif args.command == "mark":
         cmd_mark(args)
     elif args.command == "status":

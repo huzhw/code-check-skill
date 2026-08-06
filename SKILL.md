@@ -35,16 +35,27 @@ SQLite 已查记录 ┘
 `{技能目录}/scripts/code_check.py`，Python 标准库 sqlite3，零第三方依赖。
 
 ```bash
-python "{技能目录}/scripts/code_check.py" scan [--author 姓名] [--json] [--quiet]   # 扫描待检查改动
-python "{技能目录}/scripts/code_check.py" scan --baseline                            # 首次使用建基线（老仓库推荐）
-python "{技能目录}/scripts/code_check.py" mark --commit <hash> ...                 # 标记 commit 已检查
+python "{技能目录}/scripts/code_check.py" scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id]   # 扫描待检查改动（只列未检查的新项）
+python "{技能目录}/scripts/code_check.py" recheck [--since 时间] [--from 提交id]   # 重查：列范围内所有项（含已查）带次数
+python "{技能目录}/scripts/code_check.py" baseline                                   # 刷库建基线：标记全部历史，不检查
+python "{技能目录}/scripts/code_check.py" mark --commit <hash> ...                 # 标记 commit 已检查（重复标记次数+1）
 python "{技能目录}/scripts/code_check.py" mark --file <路径>:<内容hash> ...         # 标记文件已检查
-python "{技能目录}/scripts/code_check.py" status                                   # 查看进度
+python "{技能目录}/scripts/code_check.py" status                                   # 查看库记录数与检查次数
 ```
 
-**首次使用老仓库（几千 commit）必加 `--baseline`**：把当前全部历史 commit 标记为已检查，
-只查「基线之后新出现的 commit + 未提交工作区改动」，避免上千历史 commit 全被列为待查。
-`--baseline` 跟随 `--author`/`--since`（给了就只标记过滤出的，否则标记全部）。建基线不删已检查记录，幂等。
+**检查次数（check_count）**：每个 commit/工作区文件记录被检查次数。`mark` 首次=1，重复标记 +1。
+想二次/多次检查同一批改动时用 `recheck`（见下方命令族），重要需求多查几轮、简单需求一次就够。
+
+**命令族（同仓库 6 个 skill）**：
+
+| 命令 | 脚本调用 | 作用 |
+|---|---|---|
+| `/code-check` | `scan` | 首查：全范围增量 |
+| `/code-check-today` | `scan --since today` | 首查：今天提交 |
+| `/code-check-from <commitId>` | `scan --from <commitId>` | 首查：从某提交起（含）往后 |
+| `/code-recheck-today` | `recheck --since today` | 重查今天（列全部带次数） |
+| `/code-recheck-from <commitId>` | `recheck --from <commitId>` | 重查从某提交起 |
+| `/code-check-history` | `baseline` | 刷库建基线（不检查） |
 
 ---
 
@@ -147,7 +158,7 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 | 场景 | 处理 |
 |------|------|
 | `git amend` / `rebase` 改 hash | 脚本按「commit_time + subject」二次兜底去重，已查过的不重查 |
-| 首次使用全量检查量大 | **老仓库（几百 commit 以上）用 `scan --baseline` 建基线**，历史 commit 一次性标记已检查，只查之后的新改动；只想看近期提交可 `--since="today"` 叠加 `--author` 只查自己的 |
+| 首次使用全量检查量大 | **老仓库（几百 commit 以上）用 `/code-check-history` 建基线**（脚本 `baseline`），历史 commit 一次性标记为已检查，只查之后的新改动 |
 | git 对纯日期/today 解析有坑 | Windows 下 `--since` 只写 `today`/`2026-08-06` 会被 git 误解析成「明天」漏查；脚本已自动补 ` 00:00` 归一化，正常写即可 |
 | 出现破坏性操作（删文件/SQL 清表/无条件删改） | 必须列出数据影响范围和能否恢复；拿不准标「待确认」，不许直接放行 |
 | 非 git 目录运行 | 脚本报错 `fatal: not a git repository`，不生成库 |
