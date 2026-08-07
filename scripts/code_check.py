@@ -24,7 +24,7 @@ code-check 增量代码检查脚本
     python code_check.py status
         查看库记录数与检查次数。
     python code_check.py report-path [--commit <hash>]... [--work] [--recheck]
-        建报告目录 `.code-check-reports/` 并打印报告文件路径（日期_时间[+commitids][+work]），AI 写内容。
+        建报告目录 `.code-check-reports/` 并打印报告文件路径（日期_时间[_recheck][_共N个_最早~最新][+work]），AI 写内容。
 
 库位置：被检查项目 git 根目录下 `.code-check.db`（该文件加入 .gitignore，不入库）。
 repo 标识：git remote origin 地址优先，无 remote 用绝对路径。
@@ -576,11 +576,20 @@ def cmd_status(args):
     conn.close()
 
 
+def commit_time(root, commit):
+    """取某 commit 的提交时间（ISO 8601），供排序起止。取不到返回空串。"""
+    try:
+        return git(root, "log", "-1", "--format=%aI", commit).strip()
+    except RuntimeError:
+        return ""
+
+
 def cmd_report_path(args):
     """建报告目录 + 算报告文件名，打印目标路径。AI 负责写报告内容。
 
-    文件名：日期_时间[_recheck][_commitids][+work].md，如 20260806_143000_acd4fef8+work.md。
-    撞名自动追加 _2/_3，避免同秒多次检查互相覆盖。无内容可报时（无 commit 也无工作区改动）报错不建。
+    文件名：日期_时间[_recheck][_共N个_最早~最新][+work].md，如 20260803_103000_共24个_e455b7b~db5a92f.md。
+    起止取本次 --commit 里按提交时间最早/最晚的短 hash（按时间排序，非传参顺序），体现「提交次数 + 范围」；
+    单 commit 只列其 hash。撞名自动追加 _2/_3，避免同秒多次检查互相覆盖。无内容可报时（无 commit 也无工作区改动）报错不建。
     """
     root = repo_root(args.repo_dir)
     if not args.commit and not args.work:
@@ -592,11 +601,16 @@ def cmd_report_path(args):
     name = ts
     if args.recheck:
         name += "_recheck"
-    hashes = [h[:7] for h in args.commit]
-    if len(hashes) > 3:
-        hashes = hashes[:3] + ["共{}个".format(len(args.commit))]
-    if hashes:
-        name += "_" + "-".join(hashes)
+    if args.commit:
+        # 按提交时间排序：最早在前、最新在后 → 起止范围
+        ordered = sorted(args.commit, key=lambda h: commit_time(root, h))
+        total = len(ordered)
+        first = ordered[0][:7]
+        last = ordered[-1][:7]
+        if total == 1:
+            name += "_{}".format(first)
+        else:
+            name += "_共{}个_{}~{}".format(total, first, last)
     if args.work:
         name += "+work"
     path = os.path.join(report_dir, name + ".md")

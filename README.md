@@ -25,11 +25,11 @@
 - **范围首查** — 只查今天提交（`scan --since today`）、从某提交起（`scan --from <commitId>`）
 - **重查** — `recheck` 二次/多次分析，怕一次检查不准时用
 - **刷库建基线** — `baseline` 老仓库一次性归档全部历史，不实际检查
-- **数据表操作清单** — 报告列出本次 diff 实际涉及的库·表·操作，**写操作（增删改）重点核对：变更字段 + 定位条件（WHERE/ON）**，查询仅核对表名
+- **数据表操作清单** — 报告列出本次 diff 实际涉及的库·表·操作，**UPDATE/DELETE/MERGE 重点核对：变更字段 + 定位条件（WHERE/ON）**，INSERT 仅核对表名
 - **多项目隔离** — `repo` 字段区分仓库，各项目检查进度互不影响
 - **已提交 + 未提交全覆盖** — 新 commit 和未提交的工作区改动都查
 - **amend/rebase 免疫** — hash 变了按「时间+提交说明」兜底去重，不重查
-- **报告落盘** — 完整报告写入被检查项目 `.code-check-reports/` 目录，文件名带日期、时间、commit id
+- **报告落盘** — 完整报告写入被检查项目 `.code-check-reports/` 目录，文件名带日期、时间、提交次数与起止 commit
 - **零依赖** — Python 标准库 sqlite3，不用装包
 
 ## 命令族（同仓库 6 个 skill）
@@ -58,7 +58,7 @@
 | **方言兼容** | 达梦/国产库 ROWNUM、分页、关键字、双引号、与 Oracle/MySQL 差异 | 分页写法不兼容、保留字当列名 |
 | **前端** | XSS、危险标签、v-html、无 key、内存泄漏 | 注入 HTML、循环无 key |
 | **事务** | 批量操作无事务、提交过早、脏读 | 半途失败数据不一致 |
-| **数据表操作** | diff 里每处 SQL 涉及的库（schema）+ 表名 + 操作类型；**写操作（INSERT/UPDATE/DELETE/MERGE）必须写明变更字段 + 定位条件（WHERE/ON）**；SELECT 仅核对表名 | 表名写错库、表名拼错、张冠李戴、DELETE/UPDATE 无 WHERE 全表误删误改 |
+| **数据表操作** | diff 里每处 SQL 涉及的库（schema）+ 表名 + 操作类型；**UPDATE/DELETE/MERGE 必须写明变更字段 + 定位条件（WHERE/ON）**，INSERT 仅核对表名 | 表名写错库、表名拼错、张冠李戴、DELETE/UPDATE 无 WHERE 全表误删误改 |
 | **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、删对象（库/表/用户/索引/列）、权限变更、覆盖写无备份 | `rm -rf`、`DROP TABLE`/`TRUNCATE`、`DELETE`/`UPDATE` 无 WHERE、`DROP USER`/`DROP INDEX`/`DROP DATABASE`/`ALTER TABLE DROP COLUMN`、`REVOKE`、覆盖不备份 |
 | **敏感信息** | 硬编码密钥/口令、日志打印密码/token、.env/证书入库 | API key 写死、log 打 token |
 | **路径安全** | 解压/写入未隔离、上传文件名拼接、解压路径穿越、符号链接 | 解压落临时目录根、`../` 逃逸、软链指向外部 |
@@ -105,7 +105,7 @@ python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看�
 | 项 | 说明 |
 |----|------|
 | 目录 | 被检查项目 git 根下 `.code-check-reports/`（与 `.code-check.db` 同级，不入库） |
-| 文件名 | `日期_时间[_recheck][_commitids][+work].md`，如 `20260806_143000_acd4fef8+work.md`、`20260806_143500_recheck_acd4fef8.md` |
+| 文件名 | `日期_时间[_recheck][_共N个_最早~最新][+work].md`，如 `20260803_103000_共24个_e455b7b~db5a92f.md`、`20260804_103500_recheck_共15个_caad846~c202dc9.md` |
 | 生成 | `report-path --commit <hash>... [--work] [--recheck]` 建目录、算文件名并打印路径，AI 把报告写入 |
 | 撞名 | 同一秒多次检查自动追加 `_2`，不覆盖 |
 | 无新改动 | 不写报告文件，直接结束 |
@@ -121,10 +121,10 @@ python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看�
 ### 🗄️ 数据表写操作（增删改，重点核对）
 | 库/SCHEMA | 表名 | 操作 | 变更字段（更新/插入啥） | 定位条件（根据啥） | 来源 |
 |---|---|---|---|---|---|
-| AI_AUDIT | push_catalog_file_config | DELETE | —（删行） | WHERE ID | AiAuditCatalogFilePushConfigMybatisMapper.xml:122 |
+| 本库 | T_XY_CMS_CATALOG_FC | DELETE | —（删行） | WHERE c_id | UploadBatchMybatisMapper.xml:31 |
 | AI_AUDIT | push_catalog_file_config | UPDATE | PATH_EXPR、PROJECT_CATEGORY（COALESCE 保原值）等 | WHERE ID | AiAuditCatalogFilePushConfigMybatisMapper.xml:108 |
-| 本库 | T_XY_CMS_CATALOG_FC | MERGE | 匹配:UPDATE c_hasfile='1'；不匹配:INSERT c_id,c_pid,…(14 字段) | ON c_id | UploadBatchMybatisMapper.xml:8 |
-| 本库 | T_XY_DATA_FILE_VERSION | INSERT | ID,FILE_ID,NODE_ID,NAME,…(12 字段) | — | UploadBatchMybatisMapper.xml:151 |
+| 本库 | T_XY_CMS_CATALOG_FC | MERGE | 匹配:UPDATE c_hasfile='1'；不匹配:INSERT | ON c_id | UploadBatchMybatisMapper.xml:8 |
+| AI_AUDIT | push_catalog_file_ai_audit | INSERT | — | — | PushCatalogFileAiAuditMybatisMapper.xml:8 |
 
 ### 🔍 数据表查询（SELECT，仅核对表名，不深究）
 | 库/SCHEMA | 表名 | 来源 |
@@ -133,8 +133,9 @@ python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看�
 
 规则：
 - **写操作按语句主类型标**：INSERT/UPDATE/DELETE/MERGE；MERGE 属"含增改"，匹配/不匹配两分支分别写
-- **变更字段**：UPDATE 列 SET 的字段、INSERT 列插入字段、DELETE 填「—（删行）」；字段 ≤6 个全列，>6 个列前 3 个 +「等 N 个字段」
-- **定位条件**：UPDATE/DELETE 填 WHERE 的键，MERGE 填 ON 的键，INSERT 填「—」；动态表名（${tableName}）标注分表
+- **详略分流**：INSERT 不展开（变更字段、定位条件都填「—」，核对到表名即可）；**UPDATE/DELETE/MERGE 是核对重点**
+- **变更字段**：UPDATE/MERGE 列 SET 的字段（≤6 个全列，>6 个列前 3 个 +「等 N 个字段」）；DELETE 填「—（删行）」；INSERT 填「—」
+- **定位条件（WHERE/ON）必填**：UPDATE/DELETE 填 WHERE 的键，MERGE 填 ON 的键，INSERT 填「—」；动态表名（${tableName}）标注分表
 - **只列本次 diff 实际 SQL 涉及的表**；库名 = SQL 里 schema 前缀或 datasource 归属，无前缀标「本库」
 - 用途：核对**删了啥/按啥删、按啥更新/更新了啥**，表名有没有写错库、拼错、张冠李戴；SELECT 仅核对表名，不深究
 
