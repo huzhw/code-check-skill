@@ -22,7 +22,7 @@
 
 - **增量检查** — git log 与 SQLite 差集，只查新提交；工作区改动按内容 hash 去重
 - **检查次数** — `check_count` 记录每个改动被检查几次，重复标记次数 +1
-- **范围首查** — 只查今天提交（`scan --since today`）、从某提交起（`scan --from <commitId>`）
+- **范围首查** — 只查今天提交（`scan --since today`）、昨天提交（`scan --since yesterday`）、从某提交起（`scan --from <commitId>`）
 - **重查** — `recheck` 二次/多次分析，怕一次检查不准时用
 - **刷库建基线** — `baseline` 老仓库一次性归档全部历史，不实际检查
 - **数据表操作清单** — 报告列出本次 diff 实际涉及的库·表·操作，**UPDATE/DELETE/MERGE 重点核对：变更字段 + 定位条件（WHERE/ON）**，INSERT 仅核对表名
@@ -32,14 +32,16 @@
 - **报告落盘** — 完整报告写入被检查项目 `.code-check-reports/` 目录，文件名带日期、时间、提交次数与起止 commit
 - **零依赖** — Python 标准库 sqlite3，不用装包
 
-## 命令族（同仓库 6 个 skill）
+## 命令族（同仓库 8 个 skill）
 
 | 命令 | 脚本调用 | 作用 |
 |---|---|---|
 | `/code-check` | `scan` | 首查：全范围增量 |
 | `/code-check-today` | `scan --since today` | 首查：今天提交 |
+| `/code-check-yesterday` | `scan --since yesterday` | 首查：昨天提交 |
 | `/code-check-from <commitId>` | `scan --from <commitId>` | 首查：从某提交起（含）往后 |
 | `/code-recheck-today` | `recheck --since today` | 重查今天（列全部带次数） |
+| `/code-recheck-yesterday` | `recheck --since yesterday` | 重查昨天（列全部带次数） |
 | `/code-recheck-from <commitId>` | `recheck --from <commitId>` | 重查从某提交起 |
 | `/code-check-history` | `baseline` | 刷库建基线（不检查） |
 
@@ -67,12 +69,12 @@
 
 ## 触发词
 
-代码检查、检查代码、隐患检查、code-check、增量检查；家族子技能各自有 today / from / recheck / baseline 触发词。
+代码检查、检查代码、隐患检查、code-check、增量检查；家族子技能各自有 today / yesterday / from / recheck / baseline 触发词。
 
 ## 工作方式
 
 ```bash
-# 1. 扫描（首查全范围；只查今天加 --since today；从某提交起加 --from <commitId>）
+# 1. 扫描（首查全范围；只查今天加 --since today；只查昨天加 --since yesterday；从某提交起加 --from <commitId>）
 python ~/.claude/skills/code-check/scripts/code_check.py scan
 
 # 2. AI 逐项检查隐患（见上面检查清单 11 个维度）
@@ -179,10 +181,12 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 ```text
 code-check/
 ├── SKILL.md               # 主技能：完整检查流程 + 检查清单（给 AI 看）
-├── scripts/code_check.py  # 唯一脚本，6 个 skill 共用（Python 标准库，零依赖）
+├── scripts/code_check.py  # 唯一脚本，8 个 skill 共用（Python 标准库，零依赖）
 ├── code-check-today/      # 子技能：只查今天
+├── code-check-yesterday/  # 子技能：只查昨天
 ├── code-check-from/       # 子技能：从某提交起查
 ├── code-recheck-today/    # 子技能：重查今天
+├── code-recheck-yesterday/# 子技能：重查昨天
 ├── code-recheck-from/     # 子技能：从某提交起重查
 ├── code-check-history/    # 子技能：刷库建基线
 └── JUNCTION说明.md          # 全局 skill 目录 junction 双向同步说明

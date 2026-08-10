@@ -47,14 +47,16 @@ python "{技能目录}/scripts/code_check.py" report-path [--commit <hash>]... [
 **检查次数（check_count）**：每个 commit/工作区文件记录被检查次数。`mark` 首次=1，重复标记 +1。
 想二次/多次检查同一批改动时用 `recheck`（见下方命令族），重要需求多查几轮、简单需求一次就够。
 
-**命令族（同仓库 6 个 skill）**：
+**命令族（同仓库 8 个 skill）**：
 
 | 命令 | 脚本调用 | 作用 |
 |---|---|---|
 | `/code-check` | `scan` | 首查：全范围增量 |
 | `/code-check-today` | `scan --since today` | 首查：今天提交 |
+| `/code-check-yesterday` | `scan --since yesterday` | 首查：昨天提交 |
 | `/code-check-from <commitId>` | `scan --from <commitId>` | 首查：从某提交起（含）往后 |
 | `/code-recheck-today` | `recheck --since today` | 重查今天（列全部带次数） |
+| `/code-recheck-yesterday` | `recheck --since yesterday` | 重查昨天（列全部带次数） |
 | `/code-recheck-from <commitId>` | `recheck --from <commitId>` | 重查从某提交起 |
 | `/code-check-history` | `baseline` | 刷库建基线（不检查） |
 
