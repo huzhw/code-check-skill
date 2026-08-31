@@ -23,6 +23,9 @@ code-check 为家族仓库，主技能目录下还有 7 个子技能目录，各
 | `C:\Users\Administrator\.claude\skills\code-recheck-yesterday` | `F:\idea-workspase-skills\code-check\code-recheck-yesterday` |
 | `C:\Users\Administrator\.claude\skills\code-recheck-from` | `F:\idea-workspase-skills\code-check\code-recheck-from` |
 | `C:\Users\Administrator\.claude\skills\code-check-history` | `F:\idea-workspase-skills\code-check\code-check-history` |
+| 全局路径（junction，DSH） | `C:\Users\Administrator\.dsh\skills\code-check` |
+| 全局路径（junction，Codex） | `C:\Users\Administrator\.codex\skills\code-check` |
+| 全局路径（junction，Zcode） | `C:\Users\Administrator\.zcode\skills\code-check` |
 
 子技能共享家族根 `scripts/code_check.py`（SKILL.md 用绝对路径引用），只维护 F 仓库即可。
 
@@ -36,6 +39,9 @@ code-check 为家族仓库，主技能目录下还有 7 个子技能目录，各
 
 ```bash
 cmd /c dir "C:\Users\Administrator\.claude\skills" | findstr code-check
+cmd /c dir "C:\Users\Administrator\.dsh\skills" | findstr code-check
+cmd /c dir "C:\Users\Administrator\.codex\skills" | findstr code-check
+cmd /c dir "C:\Users\Administrator\.zcode\skills" | findstr code-check
 ```
 
 正常应显示主技能 + 7 个子技能共 8 个 `<JUNCTION>`，如 `<JUNCTION>  ...  code-check-today`。
@@ -51,6 +57,9 @@ rd "C:\Users\Administrator\.claude\skills\code-recheck-today"
 rd "C:\Users\Administrator\.claude\skills\code-recheck-yesterday"
 rd "C:\Users\Administrator\.claude\skills\code-recheck-from"
 rd "C:\Users\Administrator\.claude\skills\code-check-history"
+rd "C:\Users\Administrator\.dsh\skills\code-check"
+rd "C:\Users\Administrator\.codex\skills\code-check"
+rd "C:\Users\Administrator\.zcode\skills\code-check"
 ```
 
 > 注意：`rd` 不要加 `/s`，否则可能递归进 F 源目录。删除 junction 只删链接，不删 F 源目录。
