@@ -12,6 +12,7 @@
 - [service-manager](https://github.com/huzhw/service-manager)：桌面服务管理工具
 - [claude-code-token-3000](https://github.com/huzhw/claude-code-token-3000-skill) — API 一键切换
 - [deepseek-harness-settings-curator](https://github.com/huzhw/deepseek-harness-settings-curator) — DSH 模型配置梳理
+- [agent-config-sync-check](https://github.com/huzhw/agent-config-sync-check)：四端同步守卫：链接/硬链接/README 同步检查与修复
 
 ---
 
