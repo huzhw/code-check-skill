@@ -13,7 +13,7 @@ motto: "重要需求多查几轮，查过的次数记下来。"
 **自适应**：今天还没检查过任何东西 → 等同 `/code-check-today` 做首查，不空转。
 
 ## 流程
-0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿 10 维检查清单、报告格式、严禁清单后再开始
+0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿 11 维检查清单、报告格式、严禁清单后再开始
 1. **重查扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> recheck --since today`
    （列出范围内所有 commit/文件，已查 N 次 / 0=新）
 2. **逐项重新分析**：对列出的**每一项**（含已查过的）重新读改动、按家族主技能 `code-check` 的检查清单再查一遍，重点找上次漏掉的问题
