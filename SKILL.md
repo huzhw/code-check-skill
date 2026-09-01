@@ -35,13 +35,13 @@ SQLite 已查记录 ┘
 `{技能目录}/scripts/code_check.py`，Python 标准库 sqlite3，零第三方依赖。
 
 ```bash
-python "{技能目录}/scripts/code_check.py" scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id]   # 扫描待检查改动（只列未检查的新项）
-python "{技能目录}/scripts/code_check.py" recheck [--since 时间] [--from 提交id]   # 重查：列范围内所有项（含已查）带次数
-python "{技能目录}/scripts/code_check.py" baseline                                   # 刷库建基线：标记全部历史，不检查
-python "{技能目录}/scripts/code_check.py" mark --commit <hash> ...                 # 标记 commit 已检查（重复标记次数+1）
-python "{技能目录}/scripts/code_check.py" mark --file <路径>:<内容hash> ...         # 标记文件已检查
-python "{技能目录}/scripts/code_check.py" status                                   # 查看库记录数与检查次数
-python "{技能目录}/scripts/code_check.py" report-path [--commit <hash>]... [--work] [--recheck]   # 建报告目录并打印报告文件路径（AI 写内容）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id]   # 扫描待检查改动（只列未检查的新项）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> recheck [--since 时间] [--from 提交id]   # 重查：列范围内所有项（含已查）带次数
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> baseline                                   # 刷库建基线：标记全部历史，不检查
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ...                 # 标记 commit 已检查（重复标记次数+1）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> mark --file <路径>:<内容hash> ...         # 标记文件已检查
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> status                                   # 查看库记录数与检查次数
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path [--commit <hash>]... [--work] [--recheck]   # 建报告目录并打印报告文件路径（AI 写内容）
 ```
 
 **检查次数（check_count）**：每个 commit/工作区文件记录被检查次数。`mark` 首次=1，重复标记 +1。
