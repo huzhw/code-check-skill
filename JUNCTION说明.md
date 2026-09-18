@@ -10,6 +10,7 @@
 | 全局路径（junction，DSH） | `C:\Users\Administrator\.dsh\skills\code-check` |
 | 全局路径（junction，Codex） | `C:\Users\Administrator\.codex\skills\code-check` |
 | 全局路径（junction，Zcode） | `C:\Users\Administrator\.zcode\skills\code-check` |
+| 全局路径（junction，Qoder） | `C:\Users\Administrator\.qoder\skills\code-check` |
 | 实际目录（F 仓库） | `F:\idea-workspase-skills\code-check` |
 | 创建日期 | 2026-08-06 |
 
@@ -44,6 +45,7 @@ cmd /c dir "C:\Users\Administrator\.claude\skills" | findstr code-check
 cmd /c dir "C:\Users\Administrator\.dsh\skills" | findstr code-check
 cmd /c dir "C:\Users\Administrator\.codex\skills" | findstr code-check
 cmd /c dir "C:\Users\Administrator\.zcode\skills" | findstr code-check
+cmd /c dir "C:\Users\Administrator\.qoder\skills" | findstr code-check
 ```
 
 正常应显示主技能 + 7 个子技能共 8 个 `<JUNCTION>`，如 `<JUNCTION>  ...  code-check-today`。
@@ -55,6 +57,7 @@ rd "C:\Users\Administrator\.claude\skills\code-check"
 rd "C:\Users\Administrator\.dsh\skills\code-check"
 rd "C:\Users\Administrator\.codex\skills\code-check"
 rd "C:\Users\Administrator\.zcode\skills\code-check"
+rd "C:\Users\Administrator\.qoder\skills\code-check"
 ```
 
 子技能 7 个 × 四端同理，按上面规律逐条 `rd "C:\Users\Administrator\<端>\skills\<子技能名>"`。
