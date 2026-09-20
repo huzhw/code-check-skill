@@ -23,6 +23,10 @@
 ## 核心能力
 
 - **增量检查** — git log 与 SQLite 差集，只查新提交；工作区改动按内容 hash 去重
+- **确定性过滤** — 构建产物（`target/`、`node_modules/`、`*.min.js`、图片/二进制、依赖锁等）、纯产物 commit 直接标记跳过；规则可配（skill 级 `scripts/ignore-rules.txt` 通用 + 仓库根 `.code-check-ignore` 项目专属）
+- **分组检查** — 改动按类型分组（Java / MyBatis XML/SQL / 配置 XML / JSP / 前端 TS/JS / SQL 脚本 / 配置文件 / 其他），逐组过防大变更集漏查
+- **规则外置（两层）** — 通用层 `rules/*.md` 只放语言通用规则（任何项目可用），AI 按组只加载涉及的规则，`rules/general.md`（破坏性操作/敏感信息/路径安全）恒加载；项目层 `rules/profile-*.md` 放团队规范，脚本按仓库特征目录自动检测（如 wpcms 系），检测到才加载；任何项目还可在仓库根自建 `.code-check-rules.md` 放自己的规范
+- **位置锚定** — 每条隐患带 diff 原文片段做锚点，写报告前逐条核对，行号对不上降级「待确认」，防行号漂移
 - **检查次数** — `check_count` 记录每个改动被检查几次，重复标记次数 +1
 - **范围首查** — 只查今天提交（`scan --since today`）、昨天提交（`scan --since yesterday`）、从某提交起（`scan --from <commitId>`）
 - **重查** — `recheck` 二次/多次分析，怕一次检查不准时用
@@ -49,25 +53,20 @@
 
 **检查次数**：每个 commit/文件记录被检查次数，`mark` 首次=1、重复 +1。重要需求用 `recheck` 多查几轮，简单需求一次就够。
 
-## 检查什么（11 个维度，只查本次改动）
+## 检查什么（按组加载规则，只查本次改动）
 
-只对**本次 diff 实际改动的代码**逐维度检查，不查没碰过的历史代码。按改动类型套用下面维度：
+只对**本次 diff 实际改动的代码**检查，不查没碰过的历史代码。scan 按文件类型自动分组，AI 逐组检查、每组只加载对应规则文件（`rules/general.md` 恒加载）：
 
-| 维度 | 检查点 | 典型隐患 |
-|------|--------|---------|
-| **性能** | 循环内查库/HTTP、N+1 查询、大表无索引、全表扫描 | 逐条查库、无分页、子查询失控 |
-| **注入安全** | SQL 拼接 `${}`、未用 `#{}`、字符串拼 SQL、路径拼 | SQL 注入、路径遍历 |
-| **健壮性** | 空指针、类型转换、资源未关闭、异常吞掉、边界值 | NPE、连接泄漏、空集合 |
-| **并发** | 共享可变状态、线程安全、锁范围 | 静态变量并发、并发修改 |
-| **方言兼容** | 达梦/国产库 ROWNUM、分页、关键字、双引号、与 Oracle/MySQL 差异 | 分页写法不兼容、保留字当列名 |
-| **前端** | XSS、危险标签、v-html、无 key、内存泄漏 | 注入 HTML、循环无 key |
-| **事务** | 批量操作无事务、提交过早、脏读 | 半途失败数据不一致 |
-| **数据表操作** | diff 里每处 SQL 涉及的库（schema）+ 表名 + 操作类型；**UPDATE/DELETE/MERGE 必须写明变更字段 + 定位条件（WHERE/ON）**，INSERT 仅核对表名 | 表名写错库、表名拼错、张冠李戴、DELETE/UPDATE 无 WHERE 全表误删误改 |
-| **破坏性操作** | 删文件/目录、SQL 清表/无条件删改、删对象（库/表/用户/索引/列）、权限变更、覆盖写无备份 | `rm -rf`、`DROP TABLE`/`TRUNCATE`、`DELETE`/`UPDATE` 无 WHERE、`DROP USER`/`DROP INDEX`/`DROP DATABASE`/`ALTER TABLE DROP COLUMN`、`REVOKE`、覆盖不备份 |
-| **敏感信息** | 硬编码密钥/口令、日志打印密码/token、.env/证书入库 | API key 写死、log 打 token |
-| **路径安全** | 解压/写入未隔离、上传文件名拼接、解压路径穿越、符号链接 | 解压落临时目录根、`../` 逃逸、软链指向外部 |
+| 规则文件 | 层 | 覆盖维度 | 适用 |
+|---|---|---|---|
+| `rules/java.md` | 通用 | 性能（N+1/循环查库）、健壮性（NPE/资源/异常）、并发、事务 | Java 组，任何项目 |
+| `rules/sql.md` | 通用 | 注入（`${}`/`#{}`）、**数据表操作核对表**、UPDATE/DELETE 无 WHERE、批量语句规模 | MyBatis XML/SQL、SQL 脚本组，任何项目 |
+| `rules/frontend.md` | 通用 | XSS、React key/内存泄漏、空值渲染 | JSP、前端 TS/JS 组，任何项目 |
+| `rules/general.md` | 通用 | 破坏性操作、敏感信息、路径安全、配置文件、其他文件兜底 | **所有组恒加载** + 配置 XML/配置文件/其他 |
+| `rules/profile-wpcms.md` | 项目 | wpcms 团队规范（Action 只调 Service、达梦方言、DmBatchUtil、React 三件套、权限白名单等） | 仅 wpcms 系仓库自动检测加载 |
+| 仓库根 `.code-check-rules.md` | 项目 | 项目自定义规范（自建，如达梦方言用于非 wpcms 达梦项目） | 存在即加载 |
 
-每种隐患必须给出：`文件:行号` + 隐患类型 + 为什么是问题 + 改法建议；拿不准标「待确认」，不胡编。逐维度的完整执行细则见 `SKILL.md`。
+每种隐患必须给出：`文件:行号` + **锚点片段（diff 原文，防行号漂移）** + 隐患类型 + 为什么是问题 + 改法建议；拿不准标「待确认」，不胡编。完整执行细则见 `SKILL.md` 与 `rules/*.md`。
 
 ## 触发词
 
@@ -79,7 +78,7 @@
 # 1. 扫描（首查全范围；只查今天加 --since today；只查昨天加 --since yesterday；从某提交起加 --from <commitId>）
 python ~/.claude/skills/code-check/scripts/code_check.py scan
 
-# 2. AI 逐项检查隐患（见上面检查清单 11 个维度）
+# 2. AI 逐组检查隐患（按组加载 rules/*.md，general.md 恒加载）
 
 # 3. 检查完标记写回（重复标记次数+1），下次不再重查
 python ~/.claude/skills/code-check/scripts/code_check.py mark --commit <hash> --file "src/a.java:<hash>"
@@ -94,7 +93,7 @@ python ~/.claude/skills/code-check/scripts/code_check.py mark --commit <hash> --
 ```bash
 cd /path/to/project                    # 进入被检查的 git 仓库
 python ~/.claude/skills/code-check/scripts/code_check.py scan         # 1. 扫描出待查 commit + 工作区改动
-#   → AI 逐项读 diff、按检查清单报隐患（文件:行号 + 问题 + 改法）
+#   → AI 逐组读 diff、按组加载 rules/*.md 报隐患（文件:行号 + 锚点片段 + 问题 + 改法）
 python ~/.claude/skills/code-check/scripts/code_check.py report-path --commit abc123 --work   # 2. 生成报告文件路径（AI 写完整报告到 .code-check-reports/ 下）
 python ~/.claude/skills/code-check/scripts/code_check.py mark --commit abc123 --file "src/a.java:<hash>"   # 3. 标记已检查
 python ~/.claude/skills/code-check/scripts/code_check.py scan --quiet  # 4. 复查应显示"没有新改动"
@@ -144,12 +143,12 @@ python ~/.claude/skills/code-check/scripts/code_check.py status        # 6. 看�
 - 用途：核对**删了啥/按啥删、按啥更新/更新了啥**，表名有没有写错库、拼错、张冠李戴；SELECT 仅核对表名，不深究
 
 ### ⚠️ 需处理（{Y}）
-- **X{n}** `{文件}:{行号}` —— 一句话问题
+- **X{n}** `{文件}:{行号}` `` `锚点片段` `` —— 一句话问题
   - 为什么是问题：...
   - 怎么改：...
 
 ### 🔶 待确认（{Z}）
-- **D{n}** `{文件}:{行号}` —— 问题 + 不确定点
+- **D{n}** `{文件}:{行号}` `` `锚点片段` `` —— 问题 + 不确定点
 
 ### ✅ 通过
 - [{short_hash}] {说明} —— 一句话
@@ -184,8 +183,14 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 
 ```text
 code-check/
-├── SKILL.md               # 主技能：完整检查流程 + 检查清单（给 AI 看）
+├── SKILL.md               # 主技能：完整检查流程 + 规则加载 + 报告格式（给 AI 看）
 ├── scripts/code_check.py  # 唯一脚本，8 个 skill 共用（Python 标准库，零依赖）
+├── scripts/ignore-rules.txt # 过滤规则配置（构建产物目录等，跨项目通用）
+├── rules/java.md          # 通用层：Java 组检查规则（任何项目）
+├── rules/sql.md           # 通用层：MyBatis XML/SQL 组规则（数据表核对，任何项目）
+├── rules/frontend.md      # 通用层：JSP / 前端组检查规则（任何项目）
+├── rules/general.md       # 通用层：破坏性操作/敏感信息/路径安全（恒加载）
+├── rules/profile-wpcms.md # 项目层：wpcms 团队规范（脚本自动检测加载）
 ├── code-check-today/      # 子技能：只查今天
 ├── code-check-yesterday/  # 子技能：只查昨天
 ├── code-check-from/       # 子技能：从某提交起查

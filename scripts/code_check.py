@@ -4,19 +4,30 @@
 code-check 增量代码检查脚本
 ============================
 
-职责：负责增量逻辑的机械部分（git 提取 + SQLite 去重），AI 负责检查本身。
+职责：负责增量逻辑的机械部分（git 提取 + SQLite 去重 + 文件过滤 + 分组），AI 负责检查本身。
 
-三张表两张，一张按 commit 去重（已提交），一张按文件内容 hash 去重（未提交工作区改动）。
+两张表，一张按 commit 去重（已提交），一张按文件内容 hash 去重（未提交工作区改动）。
+
+文件过滤（确定性排除）：构建产物 / 依赖锁 / 二进制不进待查清单。
+规则来源三处追加合并：脚本内置默认 + 技能目录 scripts/ignore-rules.txt + 被检查仓库根 .code-check-ignore。
+文件全被过滤的 commit 单独列出，AI 无需检查直接 mark。
+
+文件分组：待查文件按类型归组（Java / MyBatis XML/SQL / 配置 XML / JSP / 前端 TS/JS / SQL 脚本 / 配置文件 / 其他），
+每组绑定专属通用规则文件（rules/*.md），AI 逐组检查、按组加载规则。
+
+规则分层：rules/*.md 只放语言通用规则（任何项目可用）；团队/项目规范放 rules/profile-{key}.md，
+脚本按仓库顶层特征目录检测项目档案（如 wpcms 系仓库），检测到才在输出里提示 AI 额外加载；
+仓库根 .code-check-rules.md 可放任意项目自己的规范，存在即提示加载。其他项目零配置，只走通用层。
 
 命令：
     python code_check.py scan [--author 姓名] [--json] [--since 时间] [--from 提交id] [--baseline] [--quiet]
-        扫描待检查改动（只列未检查的新项），输出精简清单。
+        扫描待检查改动（只列未检查的新项），输出精简清单（含过滤统计 + 检查分组）。
         --since：只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago。
         --from：从该提交起（含）往后查，如 acd4fef8。
         --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
         --quiet：只输出「N commit / M 文件待查」一行，供快速判断。
     python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id]
-        重查：列范围内所有项（含已查），每条带「已查 N 次」；check_count 随 mark 递增。
+        重查：列范围内所有项（含已查，全过滤的不列），每条带「已查 N 次」；check_count 随 mark 递增。
     python code_check.py baseline [--author 姓名]
         刷库建基线：全部历史 commit 标记已检查（check_count=0 种子），不实际检查。
     python code_check.py mark [--commit <hash>]... [--file <路径>:<内容hash>]...
@@ -32,6 +43,7 @@ repo 标识：git remote origin 地址优先，无 remote 用绝对路径。
 
 import argparse
 import datetime
+import fnmatch
 import hashlib
 import json
 import os
@@ -42,6 +54,147 @@ import sys
 
 DB_FILENAME = ".code-check.db"
 REPORT_DIR_NAME = ".code-check-reports"
+
+# ---------------- 文件过滤（确定性排除，借鉴 OCR「精确文件选择」） ----------------
+
+# 内置默认过滤：构建产物 / 依赖锁 / 二进制，纯噪音不进 AI 视野。只放业界通用规则，
+# 项目专属产物目录（如 js/v3）放被检查仓库根 .code-check-ignore。
+# 规则写法：无通配符 = 路径段；含 * ? = glob（对完整路径和文件名各试一次）。
+DEFAULT_IGNORE_PATTERNS = [
+    # 构建产物
+    "*.min.js", "*.min.css", "*.map",
+    "target", "build", "dist", "out",
+    "node_modules", "*.tsbuildinfo",
+    "*.class", "*.jar", "*.war",
+    # 依赖锁文件
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    # 图片/字体
+    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico", "*.svg", "*.bmp", "*.webp",
+    "*.woff", "*.woff2", "*.ttf", "*.eot", "*.otf",
+    # 文档/压缩包/二进制
+    "*.pdf", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx",
+    "*.zip", "*.rar", "*.7z", "*.gz", "*.tar",
+    "*.db", "*.sqlite", "*.bin", "*.exe", "*.dll", "*.so",
+    # 媒体
+    "*.mp3", "*.mp4", "*.avi", "*.mov", "*.wav",
+]
+
+# skill 级配置（通用追加，与本文件同目录）；项目级配置 = 被检查仓库根 .code-check-ignore
+IGNORE_CFG_SKILL = "ignore-rules.txt"
+IGNORE_CFG_REPO = ".code-check-ignore"
+
+
+def load_ignore_patterns(root, script_dir):
+    """内置默认 + skill 级 ignore-rules.txt + 仓库级 .code-check-ignore，追加合并。"""
+    patterns = list(DEFAULT_IGNORE_PATTERNS)
+    for cfg in (os.path.join(script_dir, IGNORE_CFG_SKILL),
+                os.path.join(root, IGNORE_CFG_REPO)):
+        if os.path.isfile(cfg):
+            with open(cfg, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        patterns.append(line)
+    return patterns
+
+
+def match_ignore(path, patterns):
+    """路径是否命中过滤规则。返回 (True, 规则) / (False, None)。
+
+    无通配符规则按「路径段」匹配：pat 作为完整目录段出现在路径任意位置即命中，
+    兼容 commit 路径带仓库子目录前缀（如 wpcms_v5.0_maven/wpcms/.../js/v3/_shared/...）。
+    """
+    p = path.replace("\\", "/")
+    base = os.path.basename(p)
+    wrapped = "/" + p.strip("/") + "/"
+    for pat in patterns:
+        pat = pat.replace("\\", "/").strip().strip("/")
+        if not pat:
+            continue
+        if "*" not in pat and "?" not in pat:
+            if "/" + pat + "/" in wrapped:
+                return True, pat
+        else:
+            if fnmatch.fnmatch(p, pat) or fnmatch.fnmatch(base, pat):
+                return True, pat
+    return False, None
+
+
+# ---------------- 文件分组（确定性归组，借鉴 OCR「智能文件打包」） ----------------
+# 组序固定；每组绑定专属通用规则文件，AI 按组加载（general.md 恒加载，见 SKILL.md）。
+
+GROUP_ORDER = ["Java", "MyBatis XML/SQL", "配置 XML", "JSP",
+               "前端 TS/JS", "SQL 脚本", "配置文件", "其他"]
+
+
+def classify_file(path):
+    """按文件类型归组。返回 (组名, 专属规则文件相对 skill 目录的路径)。"""
+    p = path.replace("\\", "/").lower()
+    if p.endswith(".java"):
+        return "Java", "rules/java.md"
+    if p.endswith(".xml"):
+        # 只认 dao 目录为 MyBatis Mapper；resources 下其他 xml（Spring/日志等）归配置
+        if "/dao/" in p:
+            return "MyBatis XML/SQL", "rules/sql.md"
+        return "配置 XML", "rules/general.md"
+    if p.endswith(".jsp"):
+        return "JSP", "rules/frontend.md"
+    if p.endswith((".ts", ".tsx", ".vue", ".js", ".jsx", ".html")):
+        return "前端 TS/JS", "rules/frontend.md"
+    if p.endswith(".sql"):
+        return "SQL 脚本", "rules/sql.md"
+    if p.endswith((".properties", ".yml", ".yaml", ".json")):
+        return "配置文件", "rules/general.md"
+    return "其他", "rules/general.md"
+
+
+# ---------------- 项目档案检测（分层规则：通用层 + 项目层） ----------------
+# 规则分两层：rules/*.md 只放语言通用规则；团队/项目规范放 rules/profile-{key}.md，
+# 脚本按仓库特征目录确定性检测，检测到才提示 AI 加载——其他项目零配置，只走通用层。
+# 另支持仓库根 .code-check-rules.md（项目自定义规范，存在就提示加载）。
+
+REPO_RULES_FILENAME = ".code-check-rules.md"
+
+PROJECT_PROFILES = [
+    # key → 仓库顶层特征目录前缀（不区分大小写，存在即命中）
+    ("wpcms", ("wpcms",)),
+]
+
+
+def detect_project_profile(root):
+    """按顶层特征目录检测项目档案。返回 profile key 或 None。"""
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return None
+    for key, prefixes in PROJECT_PROFILES:
+        for e in entries:
+            el = e.lower()
+            if any(el.startswith(p) and os.path.isdir(os.path.join(root, e))
+                   for p in prefixes):
+                return key
+    return None
+
+
+def repo_rules_file(root):
+    """仓库根项目自定义规范文件，存在返回路径，否则 None。"""
+    p = os.path.join(root, REPO_RULES_FILENAME)
+    return p if os.path.isfile(p) else None
+
+
+def group_files(files):
+    """[(状态, 路径)] → [(组名, 规则文件, [(状态, 路径)])]，按 GROUP_ORDER 固定组序，组内路径排序。"""
+    buckets = {}
+    for status, path in files:
+        g, rule = classify_file(path)
+        buckets.setdefault((g, rule), []).append((status, path))
+    groups = []
+    for g in GROUP_ORDER:
+        for (gname, rule) in sorted(buckets):
+            if gname == g:
+                items = sorted(buckets[(gname, rule)], key=lambda x: x[1])
+                groups.append((gname, rule, items))
+    return groups
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS checked_commits (
     repo        TEXT NOT NULL,
@@ -278,11 +431,25 @@ def file_content_hash(root, path):
 
 # ---------------- 命令 ----------------
 
+def split_files_by_ignore(files, patterns):
+    """[(状态, 路径)] 拆成 (有效文件, 被过滤文件)。"""
+    valid, filtered = [], []
+    for status, path in files:
+        hit, _ = match_ignore(path, patterns)
+        if hit:
+            filtered.append((status, path))
+        else:
+            valid.append((status, path))
+    return valid, filtered
+
+
 def cmd_scan(args):
     root = repo_root(args.repo_dir)
     rid = repo_id(root)
     db_path = os.path.join(root, DB_FILENAME)
     conn = init_db(db_path)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    patterns = load_ignore_patterns(root, script_dir)
 
     if args.from_commit:
         try:
@@ -302,15 +469,22 @@ def cmd_scan(args):
             print("📌 已建立基线：标记 {} 个历史 commit 为已检查（check_count=0 种子，未实际检查）".format(n))
     new_commits = filter_new_commits(conn, rid, commits)
     commit_detail = []
+    skipped_commits = []  # 文件全被过滤的 commit，无需检查直接标记
     for c in new_commits:
         try:
             files = commit_changed_files(root, c["hash"])
         except RuntimeError:
             files = []
-        commit_detail.append({
+        valid, filtered = split_files_by_ignore(files, patterns)
+        entry = {
             "hash": c["hash"], "time": c["time"], "author": c["author"],
-            "subject": c["subject"], "files": files,
-        })
+            "subject": c["subject"], "files": valid, "filtered_files": filtered,
+        }
+        if valid:
+            entry["groups"] = [[g, rule, items] for g, rule, items in group_files(valid)]
+            commit_detail.append(entry)
+        else:
+            skipped_commits.append(entry)
 
     # 2. 未提交工作区改动
     try:
@@ -318,11 +492,16 @@ def cmd_scan(args):
     except RuntimeError:
         wfiles = []
     work_detail = []
+    n_filtered_work = 0
     for status, path in wfiles:
         if status in ("D",):
             continue  # 已删除文件无内容可查
         if os.path.basename(path) == DB_FILENAME:
             continue  # 跳过库文件自身
+        hit, _ = match_ignore(path, patterns)
+        if hit:
+            n_filtered_work += 1
+            continue
         h = file_content_hash(root, path)
         if h is None:
             continue
@@ -335,8 +514,12 @@ def cmd_scan(args):
     result = {
         "repo": rid,
         "db_path": db_path,
+        "project_profile": detect_project_profile(root),
+        "repo_rules_file": repo_rules_file(root),
         "new_commits": commit_detail,
+        "skipped_commits": skipped_commits,
         "working_files": work_detail,
+        "filtered_working_files": n_filtered_work,
     }
 
     if args.json:
@@ -346,6 +529,8 @@ def cmd_scan(args):
     n_new_commit = len(commit_detail)
     new_files = [f for f in work_detail if not f["checked_before"]]
     n_new_file = len(new_files)
+    n_filtered_total = n_filtered_work + sum(len(c["filtered_files"]) for c in commit_detail) \
+        + sum(len(c["filtered_files"]) for c in skipped_commits)
 
     if args.quiet:
         # 只出一行总结，供快速判断是否有待查项
@@ -359,32 +544,72 @@ def cmd_scan(args):
     print("code-check 扫描：{}".format(os.path.basename(os.path.normpath(root))))
     print("=" * 50)
     print("待查：{} 个 commit，{} 个工作区文件".format(n_new_commit, n_new_file))
+    if n_filtered_total:
+        print("已过滤 {} 个文件（构建产物/二进制等，规则：内置 + scripts/ignore-rules.txt + 仓库 .code-check-ignore）"
+              .format(n_filtered_total))
+    profile = detect_project_profile(root)
+    custom_rules = repo_rules_file(root)
+    if profile:
+        print("项目档案：{} → 额外加载 {}（团队规范，叠加在通用规则上）".format(
+            profile, os.path.join(script_dir, "rules", "profile-{}.md".format(profile))))
+    else:
+        print("项目档案：无 → 仅用通用规则（团队规范可写仓库根 {}）".format(REPO_RULES_FILENAME))
+    if custom_rules:
+        print("项目自定义规范：{} → 加载".format(custom_rules))
     if n_new_commit == 0 and n_new_file == 0:
-        print("✅ 没有新改动，全部已检查过。")
+        if skipped_commits:
+            print("⚠ 有效改动为 0（仅剩全过滤 commit，见下），未检查不标记。")
+        else:
+            print("✅ 没有新改动，全部已检查过。")
+        has_content = bool(skipped_commits)
+    else:
+        has_content = True
+    if not has_content:
         return
     print()
 
     if commit_detail:
-        print("【已提交的新 commit】")
+        print("【已提交的新 commit（按组检查）】")
         for c in commit_detail:
             short = c["hash"][:7]
             # c["time"] 形如 2026-08-06T18:47:34+08:00，取 MM-DD HH:MM
             t = c["time"][5:16].replace("T", " ")
             print("  [{short}] {time} {author}  {subject}".format(
                 short=short, time=t, author=c["author"], subject=c["subject"]))
-            for status, path in c["files"]:
-                print("      {status}  {path}".format(status=status, path=path))
+            for g, rule, items in c["groups"]:
+                print("      □ {g}（{n} 文件）→ {rule}".format(g=g, n=len(items), rule=rule))
+                for status, path in items:
+                    print("          {status}  {path}".format(status=status, path=path))
+            if c["filtered_files"]:
+                for status, path in c["filtered_files"]:
+                    print("      ⏭过滤  {path}".format(path=path))
+        print()
+
+    if skipped_commits:
+        print("【全过滤 commit（文件全是构建产物/二进制，无需检查，直接标记）】")
+        for c in skipped_commits:
+            short = c["hash"][:7]
+            t = c["time"][5:16].replace("T", " ")
+            print("  [{short}] {time} {author}  {subject}".format(
+                short=short, time=t, author=c["author"], subject=c["subject"]))
+            for status, path in c["filtered_files"]:
+                print("      ⏭过滤  {path}".format(path=path))
         print()
 
     if new_files:
-        print("【未提交工作区改动】")
-        for f in new_files:
-            print("  [{status}] {path}".format(status=f["status"], path=f["path"]))
+        print("【未提交工作区改动（按组检查）】")
+        groups = group_files([(f["status"], f["path"]) for f in new_files])
+        for g, rule, items in groups:
+            print("  □ {g}（{n} 文件）→ {rule}".format(g=g, n=len(items), rule=rule))
+            for status, path in items:
+                print("      [{status}] {path}".format(status=status, path=path))
         print()
 
     print("—— 检查完写回标记（AI 用）——")
     for c in commit_detail:
         print("  mark --commit {hash}".format(hash=c["hash"]))
+    for c in skipped_commits:
+        print("  mark --commit {hash}   # 全过滤，无需检查".format(hash=c["hash"]))
     for f in new_files:
         print("  mark --file {path}:{h}".format(path=f["path"], h=f["content_hash"]))
 
@@ -456,6 +681,8 @@ def cmd_recheck(args):
     rid = repo_id(root)
     db_path = os.path.join(root, DB_FILENAME)
     conn = init_db(db_path)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    patterns = load_ignore_patterns(root, script_dir)
 
     if not args.since and not args.from_commit:
         print("❌ recheck 需指定范围：--since 时间 或 --from 提交id（如 recheck --since today）",
@@ -476,9 +703,13 @@ def cmd_recheck(args):
             files = commit_changed_files(root, c["hash"])
         except RuntimeError:
             files = []
+        valid, filtered = split_files_by_ignore(files, patterns)
+        if not valid:
+            continue  # 全过滤 commit 重查也不列
         commit_rows.append({
             "hash": c["hash"], "time": c["time"], "author": c["author"],
-            "subject": c["subject"], "files": files,
+            "subject": c["subject"], "files": valid, "filtered_files": filtered,
+            "groups": group_files(valid),
             "count": commit_check_count(conn, rid, c["hash"]),
         })
 
@@ -492,6 +723,9 @@ def cmd_recheck(args):
             continue
         if os.path.basename(path) == DB_FILENAME:
             continue
+        hit, _ = match_ignore(path, patterns)
+        if hit:
+            continue
         h = file_content_hash(root, path)
         if h is None:
             continue
@@ -502,27 +736,40 @@ def cmd_recheck(args):
     print("code-check 重查：{}".format(os.path.basename(os.path.normpath(root))))
     print("=" * 50)
     print("范围：{} 个 commit，{} 个工作区文件".format(len(commit_rows), len(work_rows)))
+    profile = detect_project_profile(root)
+    custom_rules = repo_rules_file(root)
+    if profile:
+        print("项目档案：{} → 额外加载 {}（团队规范，叠加在通用规则上）".format(
+            profile, os.path.join(script_dir, "rules", "profile-{}.md".format(profile))))
+    if custom_rules:
+        print("项目自定义规范：{} → 加载".format(custom_rules))
     if not commit_rows and not work_rows:
-        print("该范围内无改动。")
+        print("该范围内无改动（或全被过滤）。")
         return
     print()
 
     if commit_rows:
-        print("【commit（已查 N 次，0=新）】")
+        print("【commit（已查 N 次，0=新，按组检查）】")
         for c in commit_rows:
             t = c["time"][5:16].replace("T", " ")
             print("  [{short}] {time} {author}  {subject}  （已查 {cnt} 次）".format(
                 short=c["hash"][:7], time=t, author=c["author"],
                 subject=c["subject"], cnt=c["count"]))
-            for status, path in c["files"]:
-                print("      {status}  {path}".format(status=status, path=path))
+            for g, rule, items in c["groups"]:
+                print("      □ {g}（{n} 文件）→ {rule}".format(g=g, n=len(items), rule=rule))
+                for status, path in items:
+                    print("          {status}  {path}".format(status=status, path=path))
         print()
 
     if work_rows:
-        print("【工作区文件（已查 N 次，0=新）】")
-        for f in work_rows:
-            print("  [{status}] {path}  （已查 {cnt} 次）".format(
-                status=f["status"], path=f["path"], cnt=f["count"]))
+        print("【工作区文件（已查 N 次，0=新，按组检查）】")
+        groups = group_files([(f["status"], f["path"]) for f in work_rows])
+        for g, rule, items in groups:
+            print("  □ {g}（{n} 文件）→ {rule}".format(g=g, n=len(items), rule=rule))
+            for status, path in items:
+                f = next(x for x in work_rows if x["path"] == path)
+                print("      [{status}] {path}  （已查 {cnt} 次）".format(
+                    status=status, path=path, cnt=f["count"]))
         print()
 
     print("—— 检查完写回标记（AI 用），重复 mark 次数 +1 ——")

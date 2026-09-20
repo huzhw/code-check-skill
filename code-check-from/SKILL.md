@@ -14,11 +14,11 @@ motto: "增量检查不是偷懒——查过的记下来，只碰新代码。"
 `/code-check-from <commitId>`，例如 `/code-check-from acd4fef8`（commitId 是 git 提交短码/全码）。
 
 ## 流程
-0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿 11 维检查清单、报告格式、严禁清单后再开始
+0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿分组检查规则（rules/*.md 加载方式）、报告格式、严禁清单后再开始
 1. **取 commitId**：从用户消息里取提交 id 参数
 2. **扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> scan --from <commitId>`
    （`--from` 含该提交本身 + 之后的新提交 + 工作区改动；id 非法会报错）
-3. **逐项检查**：按家族主技能 `code-check` 的检查清单逐维度检查，每条隐患给出 文件:行号 + 问题 + 改法，拿不准标「待确认」
+3. **逐组检查**：按 scan 输出的分组逐组过，每组先 Read 对应 `{技能目录}/rules/xxx.md`（rules/general.md 恒加载），每条隐患给出 文件:行号 + 锚点片段 + 问题 + 改法，拿不准标「待确认」
 4. **报告**：结论置顶、按「⚠️需处理 / 🔶待确认 / ✅通过」分组
 5. **标记写回**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ... --file <路径>:<内容hash> ...`
 6. **复查**：`scan --from <commitId> --quiet` 应显示无待查

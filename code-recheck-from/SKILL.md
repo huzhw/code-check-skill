@@ -16,11 +16,11 @@ motto: "重要需求多查几轮，查过的次数记下来。"
 `/code-recheck-from <commitId>`，例如 `/code-recheck-from acd4fef8`。
 
 ## 流程
-0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿 11 维检查清单、报告格式、严禁清单后再开始
+0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿分组检查规则（rules/*.md 加载方式）、报告格式、严禁清单后再开始
 1. **取 commitId**：从用户消息里取提交 id 参数
 2. **重查扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> recheck --from <commitId>`
    （含该提交 + 之后的新提交 + 工作区，已查 N 次 / 0=新）
-3. **逐项重新分析**：对列出的每一项（含已查过的）重新读改动、按家族主技能 `code-check` 的检查清单再查一遍
+3. **逐组重新分析**：对列出的每一项（含已查过的）重新读改动、按主技能的分组加载 rules/*.md 再查一遍（general.md 恒加载）
 4. **报告**：结论置顶、按「⚠️需处理 / 🔶待确认 / ✅通过」分组
 5. **再次标记**：`mark --commit <hash> ... --file <路径>:<内容hash> ...`（次数 +1）
 6. **复查**：`recheck --from <commitId>` 确认次数已递增
