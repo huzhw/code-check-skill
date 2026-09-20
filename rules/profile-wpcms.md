@@ -18,6 +18,7 @@
 | 删目录先查分表 | 删目录表数据前必须先用项目分表确认该目录下无文件，禁止不做存在性检查直接删 |
 | 新接口显式传 projectId | 前端调新接口必传 projectId，禁止服务端仅凭业务主键反查项目归属兜底 |
 | JSP 改 React 不删老 | 只允许新增（新页面/新接口/新视图/新权限），动旧 JSP/旧 Controller 老方法/旧权限配置 → 违规 |
+| 大事务禁令（2026-09-20 生产事故） | 批量任务（hash/目录树/归档统计类）入口被请求级事务包裹成整任务单事务 → **P0 阻断**（正确姿势见 java.md"整任务单事务"条）；范式参照 ArchiveStatisticsMybatisService（预载/计算无事务 + 清表+写入编程式短事务）；**上线自检：新任务必须在另一会话验证写库可见性（COUNT 前后对比），禁止只看代码推断"随做随提交"**；**定时空壳层切面陷阱：`com.emvc.scheduler.service.impl` 被 xask-tx.xml txPointcut（`com.emvc.*.service.impl..*(..)`）命中，txAdvice 对 `execute*`/`*` 全 REQUIRED——空壳 execute() 进代理即开事务，委托的 MyBatis 写库（同 dataSource）自动加入，逐批提交被击穿成整任务单事务；新建/重构定时空壳类必须放切点外（如 `com.emvc.scheduler.task.impl`），存量壳层只许换内部委托实现、禁止把多语句写库搬进壳层**；这张表的定时任务只许夜间跑 |
 
 ## 达梦方言兼容
 
