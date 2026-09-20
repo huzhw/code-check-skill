@@ -133,8 +133,8 @@ def classify_file(path):
     if p.endswith(".java"):
         return "Java", "rules/java.md"
     if p.endswith(".xml"):
-        # 只认 dao 目录为 MyBatis Mapper；resources 下其他 xml（Spring/日志等）归配置
-        if "/dao/" in p:
+        # dao / mapper 是 MyBatis Mapper 目录通用约定（lanxum 系 Mapper XML 放 src/main/java 的 mapper 包）
+        if "/dao/" in p or "/mapper/" in p:
             return "MyBatis XML/SQL", "rules/sql.md"
         return "配置 XML", "rules/general.md"
     if p.endswith(".jsp"):
@@ -156,23 +156,31 @@ def classify_file(path):
 REPO_RULES_FILENAME = ".code-check-rules.md"
 
 PROJECT_PROFILES = [
-    # key → 仓库顶层特征目录前缀（不区分大小写，存在即命中）
+    # key → 特征列表。特征含 "/" 按相对路径判断存在；不含 "/" 按顶层目录名前缀判断（目录）
     ("wpcms", ("wpcms",)),
+    ("lanxum-java", ("lanxum-file-management",)),
+    ("lanxum-react", ("download/latest.json",)),
 ]
 
 
 def detect_project_profile(root):
-    """按顶层特征目录检测项目档案。返回 profile key 或 None。"""
+    """按特征检测项目档案。返回 profile key 或 None。"""
     try:
         entries = os.listdir(root)
     except OSError:
         return None
-    for key, prefixes in PROJECT_PROFILES:
-        for e in entries:
-            el = e.lower()
-            if any(el.startswith(p) and os.path.isdir(os.path.join(root, e))
-                   for p in prefixes):
-                return key
+    for key, markers in PROJECT_PROFILES:
+        for m in markers:
+            if "/" in m:
+                # 相对路径特征：文件或目录存在即命中
+                if os.path.exists(os.path.join(root, m.replace("/", os.sep))):
+                    return key
+            else:
+                # 顶层目录前缀特征：不区分大小写
+                ml = m.lower()
+                for e in entries:
+                    if e.lower().startswith(ml) and os.path.isdir(os.path.join(root, e)):
+                        return key
     return None
 
 

@@ -63,7 +63,7 @@
 | `rules/sql.md` | 通用 | 注入（`${}`/`#{}`）、**数据表操作核对表**、UPDATE/DELETE 无 WHERE、批量语句规模 | MyBatis XML/SQL、SQL 脚本组，任何项目 |
 | `rules/frontend.md` | 通用 | XSS、React key/内存泄漏、空值渲染 | JSP、前端 TS/JS 组，任何项目 |
 | `rules/general.md` | 通用 | 破坏性操作、敏感信息、路径安全、配置文件、其他文件兜底 | **所有组恒加载** + 配置 XML/配置文件/其他 |
-| `rules/profile-wpcms.md` | 项目 | wpcms 团队规范（Action 只调 Service、达梦方言、DmBatchUtil、React 三件套、权限白名单等） | 仅 wpcms 系仓库自动检测加载 |
+| `rules/profile-*.md` | 项目 | 团队规范浓缩层：`profile-wpcms.md`（达梦方言/批量分包/权限白名单）、`profile-lanxum-java.md`（四库 SQL 兼容/模块依赖白名单/定时任务骨架）、`profile-lanxum-react.md`（ra-lib 传参/掩码回显/客户定制包） | 按仓库特征自动检测加载，其他项目不碰 |
 | 仓库根 `.code-check-rules.md` | 项目 | 项目自定义规范（自建，如达梦方言用于非 wpcms 达梦项目） | 存在即加载 |
 
 每种隐患必须给出：`文件:行号` + **锚点片段（diff 原文，防行号漂移）** + 隐患类型 + 为什么是问题 + 改法建议；拿不准标「待确认」，不胡编。完整执行细则见 `SKILL.md` 与 `rules/*.md`。
@@ -191,6 +191,8 @@ code-check/
 ├── rules/frontend.md      # 通用层：JSP / 前端组检查规则（任何项目）
 ├── rules/general.md       # 通用层：破坏性操作/敏感信息/路径安全（恒加载）
 ├── rules/profile-wpcms.md # 项目层：wpcms 团队规范（脚本自动检测加载）
+├── rules/profile-lanxum-java.md  # 项目层：蓝信 AMISP 后端规范（四库兼容等）
+├── rules/profile-lanxum-react.md # 项目层：蓝信 AMISP 前端规范（ra-lib 等）
 ├── code-check-today/      # 子技能：只查今天
 ├── code-check-yesterday/  # 子技能：只查昨天
 ├── code-check-from/       # 子技能：从某提交起查

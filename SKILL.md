@@ -101,7 +101,10 @@ python "{技能目录}/scripts/code_check.py" scan
 | 配置 XML、配置文件、其他 | —（本身就是 general） | rules/general.md |
 
 **项目层（scan 输出「项目档案」行有提示才加载）：**
-- `项目档案：wpcms` → 额外 `Read {技能目录}/rules/profile-wpcms.md`（wpcms 团队规范：Action 只调 Service、达梦方言、DmBatchUtil、React 三件套、权限白名单等），**叠加在通用规则之上，冲突以档案为准**
+- `项目档案：wpcms` → `Read {技能目录}/rules/profile-wpcms.md`（Action 只调 Service、达梦方言、DmBatchUtil、React 三件套、权限白名单等）
+- `项目档案：lanxum-java` → `Read {技能目录}/rules/profile-lanxum-java.md`（四库 SQL 兼容、模块依赖白名单、ExceptionLogger、定时任务骨架等）
+- `项目档案：lanxum-react` → `Read {技能目录}/rules/profile-lanxum-react.md`（ra-lib ajax 传参、掩码回显、客户定制包隔离等）
+- 档案规则**叠加在通用规则之上，冲突以档案为准**；细节规范指向各仓库内 CLAUDE.md/docs/memory，检查时按需再读
 - `项目自定义规范：…/.code-check-rules.md` → 额外 Read 该文件（任何项目可自建，放自己的规范）
 - 无档案无自定义 → 只用通用层，**禁止**拿其他项目的规范套
 
