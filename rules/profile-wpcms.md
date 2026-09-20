@@ -12,7 +12,8 @@
 | SLF4J 1.x 日志 | warn/info/debug 超 2 参数用 `+` 拼接 → 应 `String.format()` |
 | 达梦批量写入 | 全量 List 直接传 `batchInsert`/`batchUpdate` → 必须 `DmBatchUtil.batch(list, batchSize, chunk -> mapper.batchXxx(chunk))` 分包 |
 | 批大小配置 | 批大小硬编码 → 应 `batch.properties` 的 `{业务}.batch.size` + `@Value("${xxx.batch.size:100}")` |
-| 项目 id 条件 | 总表（T_XY_DATA_FILE_FC 的 dg_file_project_id、T_XY_CMS_CATALOG_FC 的 c_p_id 等）SELECT/UPDATE/DELETE 必须带项目 id 条件，按主键单查也不例外 |
+| 项目 id 条件 | 表里有项目 id 字段必带（总表分表一视同仁）：T_XY_DATA_FILE_FC（dg_file_project_id）、T_XY_CMS_CATALOG_FC（c_p_id）、文件分表 T_XY_CMS_FILE_FC_{XX}（dg_file_project_id）等，SELECT/UPDATE/DELETE 一律带项目 id 条件，按主键单查也不例外；分表有其他项目杂行（生产实测），表名隔离不豁免；豁免：全局维护型任务语句（无项目上下文，如全表兜底回填、队列扫描） |
+| 文件查询用分表 | 文件查询必须用项目分表 `T_XY_CMS_FILE_FC_{XX}`（`PartTableUtil` 拼表名），禁止用总表 `T_XY_DATA_FILE_FC` 查（写入才总表+分表双写）——发现 SELECT 总表取文件数据即报 |
 | 底稿文件双写 | 文件新增/修改/删除必须总表 `T_XY_DATA_FILE_FC` 与项目分表 `T_XY_CMS_FILE_{XX}` 双写/双删（事务包裹）；查询一律用分表（`PartTableUtil.getCmsFileTableNameByProjectId`） |
 | 删目录先查分表 | 删目录表数据前必须先用项目分表确认该目录下无文件，禁止不做存在性检查直接删 |
 | 新接口显式传 projectId | 前端调新接口必传 projectId，禁止服务端仅凭业务主键反查项目归属兜底 |
