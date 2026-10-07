@@ -16,7 +16,7 @@
 
 ## 家族子技能 junction（2026-08-06 新增）
 
-code-check 为家族仓库，主技能目录下还有 7 个子技能目录，**每个子技能在四端各自建立了独立 junction**（链接名 = 子目录名）：
+code-check 为家族仓库，主技能目录下还有 7 个子技能目录，**每个子技能在五端各自建立了独立 junction**（链接名 = 子目录名）：
 
 | 子技能 | 指向（仓库子目录） |
 |---|---|
@@ -28,7 +28,7 @@ code-check 为家族仓库，主技能目录下还有 7 个子技能目录，**�
 | `code-recheck-from` | `F:\idea-workspase-skills\code-check\code-recheck-from` |
 | `code-check-history` | `F:\idea-workspase-skills\code-check\code-check-history` |
 
-子技能四端路径统一规律：`C:\Users\Administrator\.{claude|dsh|codex|zcode}\skills\<子技能名>`。
+子技能五端路径统一规律：`C:\Users\Administrator\.{claude|dsh|codex|zcode|qoder}\skills\<子技能名>`。
 
 子技能共享家族根 `scripts/code_check.py`（SKILL.md 用绝对路径引用），只维护 F 仓库即可。
 
@@ -60,7 +60,7 @@ rd "C:\Users\Administrator\.zcode\skills\code-check"
 rd "C:\Users\Administrator\.qoder\skills\code-check"
 ```
 
-子技能 7 个 × 四端同理，按上面规律逐条 `rd "C:\Users\Administrator\<端>\skills\<子技能名>"`。
+子技能 7 个 × 五端同理，按上面规律逐条 `rd "C:\Users\Administrator\<端>\skills\<子技能名>"`。
 
 > 注意：`rd` 不要加 `/s`，否则可能递归进 F 源目录。删除 junction 只删链接，不删 F 源目录。
 
