@@ -3,3 +3,4 @@
 *.db-journal
 __pycache__/
 *.pyc
+.codegraph/
