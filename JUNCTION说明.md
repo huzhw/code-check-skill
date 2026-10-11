@@ -7,7 +7,7 @@
 | 项 | 路径 |
 |----|------|
 | 全局路径（junction，Claude Code） | `C:\Users\Administrator\.claude\skills\code-check` |
-| 全局路径（junction，DSH） | `C:\Users\Administrator\.dsh\skills\code-check` |
+| 全局路径（junction，DeepSeek Harness） | `C:\Users\Administrator\.dsh\skills\code-check` |
 | 全局路径（junction，Codex） | `C:\Users\Administrator\.codex\skills\code-check` |
 | 全局路径（junction，Zcode） | `C:\Users\Administrator\.zcode\skills\code-check` |
 | 全局路径（junction，Qoder CN） | `C:\Users\Administrator\.qoder-cn\skills\code-check` |
