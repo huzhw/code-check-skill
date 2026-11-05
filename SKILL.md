@@ -72,19 +72,37 @@ python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> scan --all
 python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> recheck --all --since today
 ```
 
-**纳入判据**（两条都满足才算）：① 在 `scripts/workspaces.txt` 列出的工作区根的一层子目录下；② 是 git 仓且仓根有 `.code-check-project.toml`。
-**没登记 `.code-check-project.toml` 的仓一律不进 --all**（如 tomcat 运行时目录、非目标项目），要加仓就在该仓根建一个写中文名的 toml。
+**纳入判据**：读技能目录 `scripts/projects.json` —— `projects[].root` + `exclude` + `groups[].repos[]`。配置里没有的仓一律不进 `--all`（如 tomcat 运行时目录、非目标项目），要加仓就在该文件里加一条。
 
-**项目中文名**：仓根 `.code-check-project.toml`，内容就一行：
+**级联配置文件**（技能目录 `scripts/projects.json`）：格式仿 `legacy-audit.projects.json`，但扩展为多项目 + 仓级中文名：
 
-```toml
-name = "底稿主仓"
+```json
+{
+  "projects": [
+    {
+      "project": "中信底稿V5",
+      "root": "F:/idea-workspase-zhongXin-diGaoV5",
+      "exclude": ["vue-ccbs"],
+      "groups": [
+        {
+          "name": "底稿主仓",
+          "repos": [
+            { "dir": "standard_thdg_zxdm", "cn": "底稿主仓" },
+            { "dir": "standard_thdg_zxdm_react", "cn": "底稿前端" }
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
-**报告落位（与调用点无关）**：级联模式下报告落到 `<工作区根>/.code-check-reports/`，平铺一个目录、文件名带中文名：
+`cn` = 仓库中文名，用于报告文件名；`groups[].name` = 分组名，用于报告目录分层。`repos` 也接受纯字符串（无中文名时用目录名兜底）。
+
+**报告落位（与调用点无关）**：级联模式下报告落到 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
 
 ```
-20261105_221822_底稿主仓_recheck_5d938dc.md
+F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓/20261105_221822_底稿主仓_recheck_5d938dc.md
 ```
 
 调用 skill 时所在的目录是哪个仓**不影响**结果 —— 在主仓敲还是在引擎仓敲，扫的都是同一批仓、报告都落同样位置。
@@ -92,9 +110,9 @@ name = "底稿主仓"
 **报告路径生成**（`report-path`）：
 
 ```bash
-# 级联：落工作区根，带中文名
+# 级联：落项目根 + 分组目录，带中文名
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓> report-path --commit <hash>... --recheck \
-  --report-root "F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports" --project-name "底稿主仓"
+  --report-root "F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓" --project-name "底稿主仓"
 # 单仓（不带新参数）：仍写被检查仓自己的 .code-check-reports/，行为不变
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓> report-path --commit <hash>...
 ```
@@ -168,7 +186,7 @@ python "{技能目录}/scripts/code_check.py" scan
 1. 取报告路径：`python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path --commit <hash>... [--work] [--recheck]`
    - `--commit`：本次检查的所有 commit 短 hash，可多个；本次含工作区改动加 `--work`；重查加 `--recheck`
    - 脚本在 `<仓库git根>/.code-check-reports/`（与 .code-check.db 同级）建目录，按「日期_时间[_recheck][_共N个_最早~最新][+work]」自动命名（如 `20260803_103000_共24个_e455b7b~db5a92f.md`），起止取本次 commit 按提交时间最早/最晚的短 hash；撞名自动追加 `_2`，打印出目标路径
-   - **级联（--all）时**：加 `--report-root "<工作区根>/.code-check-reports" --project-name "<中文名>"`，报告落工作区根、文件名带中文名；不带这两个参数仍是旧行为（写被检查仓自己）
+   - **级联（--all）时**：加 `--report-root "<项目根>/.code-check-reports/<分组名>" --project-name "<中文名>"`，报告按分组分层、文件名带中文名；不带这两个参数仍是旧行为（写被检查仓自己）
 2. 用 Write 工具把下面格式的完整报告写到该路径（用第 1 步打印的绝对路径）
 3. 对话只输出一行：`📄 报告：{路径}` + 结论行（如「⚠️ 需处理 2 个（X1、X2），无紧急」）
 

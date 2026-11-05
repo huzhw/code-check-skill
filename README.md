@@ -68,20 +68,37 @@ python scripts/code_check.py --repo-dir <任意仓> scan --all
 python scripts/code_check.py --repo-dir <任意仓> recheck --all --since today
 ```
 
-**纳入判据**（两条都满足）：① 在 `scripts/workspaces.txt` 列出的工作区根的一层子目录下；② 是 git 仓且仓根有 `.code-check-project.toml`。
+**纳入判据**：读技能目录 `scripts/projects.json`（格式仿 `legacy-audit.projects.json`，扩展为多项目 + 仓级中文名）。配置里没有的仓一律不进 `--all`。
 
-**项目中文名**：仓根 `.code-check-project.toml` 写一行即可：
+**级联配置文件** `scripts/projects.json`：
 
-```toml
-name = "底稿主仓"
+```json
+{
+  "projects": [
+    {
+      "project": "中信底稿V5",
+      "root": "F:/idea-workspase-zhongXin-diGaoV5",
+      "exclude": ["vue-ccbs"],
+      "groups": [
+        {
+          "name": "底稿主仓",
+          "repos": [
+            { "dir": "standard_thdg_zxdm", "cn": "底稿主仓" },
+            { "dir": "standard_thdg_zxdm_react", "cn": "底稿前端" }
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
-没登记 toml 的仓一律不进 `--all` —— 要加仓就在该仓根建一个。
+`cn` = 仓库中文名（报告文件名用），`groups[].name` = 分组名（报告目录分层用）。`repos` 也接受纯字符串，无中文名时用目录名兜底。
 
-**报告落位与调用点无关**：级联模式下报告落 `<工作区根>/.code-check-reports/`，平铺一个目录、文件名带中文名：
+**报告落位与调用点无关**：级联模式下报告落 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
 
 ```
-20261105_221822_底稿主仓_recheck_5d938dc.md
+F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓/20261105_221822_底稿主仓_recheck_5d938dc.md
 ```
 
 在主仓敲还是在引擎仓敲，扫的都是同一批仓、报告都落同样位置。

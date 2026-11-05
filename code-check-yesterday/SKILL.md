@@ -18,10 +18,10 @@ motto: "增量检查不是偷懒——查过的记下来，只碰新代码。"
 4. **标记写回**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ... --file <路径>:<内容hash> ...`
 5. **复查**：`scan --since yesterday --quiet` 应显示无待查
 
-**级联多仓**：本命令也支持 `--all`（一次扫 `scripts/workspaces.txt` 里所有登记仓）。
+**级联多仓**：本命令也支持 `--all`（一次扫 `scripts/projects.json` 里登记的所有仓）。
 用户说「检查所有项目」「把几个仓都查一遍」时，在命令后加 `--all`。
-纳入判据：工作区根下一层子目录里「是 git 仓 且 仓根有 `.code-check-project.toml`」的仓。
-报告落 `<工作区根>/.code-check-reports/`，文件名带项目中文名（`--report-root` + `--project-name`）。
+纳入判据：读 `scripts/projects.json` 的 `projects[].root` + `exclude` + `groups[].repos[]`，配置里没有的仓不进。
+报告落 `<项目根>/.code-check-reports/<分组名>/`，文件名带项目中文名（`--report-root` + `--project-name`）。
 
 ## 说明
 - 只列未检查的新项；昨天已检查过的，二次检查用 `/code-recheck-yesterday`
