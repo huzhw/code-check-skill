@@ -26,8 +26,7 @@ code-check 增量代码检查脚本
         --from：从该提交起（含）往后查，如 acd4fef8。
         --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
         --quiet：只输出「N commit / M 文件待查」一行，供快速判断。
-        --all：级联扫描工作区下所有登记仓（scripts/workspaces.txt 里的根目录 → 子目录中有
-               .code-check-project.toml 的 git 仓），逐仓输出，末尾汇总。
+        --all：级联扫描所有登记仓（scripts/projects.json 登记的项目 → 组 → 仓），逐仓输出，末尾汇总。
     python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id] [--all]
         重查：列范围内所有项（含已查，全过滤的不列），每条带「已查 N 次」；check_count 随 mark 递增。
         --all：级联重查所有登记仓。
@@ -49,7 +48,7 @@ code-check 增量代码检查脚本
 repo 标识：remote 地址（origin 优先、gitlab 次之）+ "#" + 仓库目录名；无 remote 用绝对路径 + "#目录名"。
             拼目录名是为区分「同一 remote 的两个 clone」（如 lanxum-amisp-java 与 -zhongHai）。
             旧键仍可被识别（查询时新旧键一起查），migrate-repo-id 可把旧键改写为新键。
-项目中文名：仓库根 .code-check-project.toml 里 name = "xxx"；缺文件则不纳入级联扫描。
+项目中文名：scripts/projects.json 里每个仓的 cn 字段（级联扫描的清单与报告文件名共用）。
 """
 
 import argparse
@@ -68,11 +67,9 @@ import sys
 DB_FILENAME = ".code-check.db"
 REPORT_DIR_NAME = ".code-check-reports"
 
-# 项目中文名登记文件：仓库根 .code-check-project.toml，形如 name = "底稿主仓"
-PROJECT_CFG_NAME = ".code-check-project.toml"
-
-# 工作区清单：技能目录 scripts/workspaces.txt，每行一个工作区根目录（# 开头为注释）
-WORKSPACES_FILE = "workspaces.txt"
+# 级联配置：技能目录 scripts/projects.json，登记所有项目的工作区根、排除项、分组与仓中文名。
+# 格式仿 legacy-audit.projects.json，但扩展为多项目 + 仓级中文名（cn）。
+PROJECTS_CFG_NAME = "projects.json"
 
 # ---------------- 文件过滤（确定性排除，借鉴 OCR「精确文件选择」） ----------------
 
@@ -310,77 +307,73 @@ def legacy_repo_ids(root):
     return ids
 
 
-def read_project_name(root):
-    """读仓库根 .code-check-project.toml 的 name 字段。没有文件或没有 name 返回 None。
+def discover_workspaces(script_dir):
+    """读 scripts/projects.json，返回登记的工作区根目录列表（存在的）。"""
+    cfg = load_projects_cfg(script_dir)
+    roots = []
+    for proj in cfg.get("projects", []):
+        root = proj.get("root")
+        if not root:
+            continue
+        if os.path.isdir(root):
+            roots.append(os.path.abspath(root))
+        else:
+            print("⚠ 工作区根不存在，已跳过: {}".format(root), file=sys.stderr)
+    return roots
 
-    只做极简解析（key = "value" 单行），不引第三方依赖；引号会剥掉。
-    """
-    path = os.path.join(root, PROJECT_CFG_NAME)
+
+def load_projects_cfg(script_dir):
+    """读技能目录 scripts/projects.json。读不到返回空配置（不报错，级联才提示）。"""
+    path = os.path.join(script_dir, PROJECTS_CFG_NAME)
     if not os.path.isfile(path):
-        return None
+        return {}
     try:
         with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                if key.strip() != "name":
-                    continue
-                value = value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                    value = value[1:-1]
-                return value or None
-    except OSError:
-        return None
-    return None
-
-
-def discover_workspaces(script_dir):
-    """读 scripts/workspaces.txt，返回工作区根目录列表（存在的）。"""
-    path = os.path.join(script_dir, WORKSPACES_FILE)
-    roots = []
-    if not os.path.isfile(path):
-        return roots
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if os.path.isdir(line):
-                roots.append(os.path.abspath(line))
-            else:
-                print("⚠ 工作区根不存在，已跳过: {}".format(line), file=sys.stderr)
-    return roots
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print("⚠ 级联配置读取失败: {} ({})".format(path, e), file=sys.stderr)
+        return {}
 
 
 def discover_repos(script_dir):
     """级联发现所有登记仓。
 
-    判据：工作区根下的一层子目录，同时满足「是 git 仓」+「有 .code-check-project.toml」。
-    返回 [{root, name}]，按中文名排序；name 缺省用目录名。
+    数据源 = 技能目录 scripts/projects.json：projects[].root + exclude + groups[].repos[]。
+    groups 里给了分组名与每个仓的中文名（cn），报告按分组分层、文件名带中文名。
+    返回 [{root, name, cn, group, project, project_root}]，按项目→分组→仓顺序。
     """
+    cfg = load_projects_cfg(script_dir)
     repos = []
-    seen = set()
-    for ws in discover_workspaces(script_dir):
-        try:
-            entries = sorted(os.listdir(ws))
-        except OSError:
+    for proj in cfg.get("projects", []):
+        root = proj.get("root")
+        if not root or not os.path.isdir(root):
             continue
-        for entry in entries:
-            path = os.path.join(ws, entry)
-            if not os.path.isdir(path) or path in seen:
-                continue
-            if not os.path.isdir(os.path.join(path, ".git")):
-                continue  # 非 git 仓（如 tomcat 运行时目录）
-            name = read_project_name(path)
-            if not name:
-                continue  # 未登记中文名 → 不纳入级联
-            seen.add(path)
-            repos.append({"root": path, "name": name})
-    repos.sort(key=lambda r: r["name"])
+        root = os.path.abspath(root)
+        exclude = set(proj.get("exclude") or [])
+        for group in proj.get("groups", []):
+            gname = group.get("name") or ""
+            for item in group.get("repos", []):
+                # 兼容两种写法：字符串（无中文名）或对象 {dir, cn}
+                if isinstance(item, str):
+                    d, cn = item, ""
+                else:
+                    d = item.get("dir") or item.get("repo") or ""
+                    cn = item.get("cn") or item.get("name") or ""
+                if not d or d in exclude:
+                    continue
+                path = os.path.join(root, d)
+                if not os.path.isdir(path):
+                    print("⚠ 配置里的仓不存在，已跳过: {}".format(path), file=sys.stderr)
+                    continue
+                repos.append({
+                    "root": path,
+                    "name": cn or d,       # 中文名优先，缺省用目录名
+                    "cn": cn,
+                    "dir": d,
+                    "group": gname,
+                    "project": proj.get("project") or "",
+                    "project_root": root,
+                })
     return repos
 
 
@@ -631,15 +624,15 @@ def split_files_by_ignore(files, patterns):
 def cmd_scan_all(args, mode):
     """级联扫描/重查所有登记仓。
 
-    遍历 scripts/workspaces.txt 里的工作区根 → 一层子目录中「是 git 仓 且 有
-    .code-check-project.toml」的仓，逐仓跑 scan/recheck，末尾汇总。
-    报告落位：<工作区根>/.code-check-reports/，与调用 skill 时所在目录无关。
+    数据源 = scripts/projects.json（projects[].root + exclude + groups[].repos[]）。
+    报告落位：<项目根>/.code-check-reports/<分组名>/<日期_时间_中文名_...>.md
+    —— 与调用 skill 时所在目录无关。
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repos = discover_repos(script_dir)
     if not repos:
-        print("❌ 未发现任何登记仓。检查 {} 与各仓根 {}".format(
-            os.path.join(script_dir, WORKSPACES_FILE), PROJECT_CFG_NAME))
+        print("❌ 未发现任何登记仓。检查 {}".format(
+            os.path.join(script_dir, PROJECTS_CFG_NAME)))
         return
 
     print("=" * 60)
@@ -653,13 +646,13 @@ def cmd_scan_all(args, mode):
     for repo in repos:
         root = repo["root"]
         name = repo["name"]
-        # 报告落点：工作区根（root 的上级），与调用点无关
-        ws_root = os.path.dirname(os.path.normpath(root))
-        report_root = os.path.join(ws_root, REPORT_DIR_NAME)
+        # 报告落点：<项目根>/.code-check-reports/<分组名>/，与调用点无关
+        report_root = os.path.join(repo["project_root"], REPORT_DIR_NAME, repo["group"]) \
+            if repo["group"] else os.path.join(repo["project_root"], REPORT_DIR_NAME)
 
         sub = argparse.Namespace(**vars(args))
         sub.repo_dir = root
-        sub.title = "{}（{}）".format(name, os.path.basename(os.path.normpath(root)))
+        sub.title = "{}（{}）".format(name, repo["dir"])
         sub.suppress_mark = True
         sub.all = False
 
@@ -678,7 +671,7 @@ def cmd_scan_all(args, mode):
             total_commit += n_commit
             total_file += n_file
             if n_commit or n_file:
-                touched.append((name, root, n_commit, n_file, report_root))
+                touched.append((name, repo, n_commit, n_file, report_root))
                 print(text.rstrip())
                 print()
             else:
@@ -697,7 +690,7 @@ def cmd_scan_all(args, mode):
                         n_commit = int(m.group(1))
             total_commit += n_commit
             if n_commit:
-                touched.append((name, root, n_commit, 0, report_root))
+                touched.append((name, repo, n_commit, 0, report_root))
                 print(text.rstrip())
                 print()
             else:
@@ -709,10 +702,10 @@ def cmd_scan_all(args, mode):
         len(repos), len(touched), total_commit, total_file))
     if touched:
         print()
-        print("有改动的仓（报告落位：<工作区根>/{}/）".format(REPORT_DIR_NAME))
-        for name, root, nc, nf, rr in touched:
-            print("  · {}（{}）→ {}".format(
-                name, os.path.basename(os.path.normpath(root)), rr))
+        print("有改动的仓（报告落位：<项目根>/{}/<分组名>/）".format(REPORT_DIR_NAME))
+        for name, repo, nc, nf, rr in touched:
+            print("  · {}（{} / {}）→ {}".format(
+                name, repo["project"], repo["group"], rr))
     print("=" * 60)
 
 

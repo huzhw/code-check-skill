@@ -1,0 +1,99 @@
+{
+  "note": "code-check 级联配置：登记本机所有项目的工作区根、排除项、分组与每个仓的中文名。skill 读它做级联扫描与报告命名。格式仿 legacy-audit.projects.json，但扩展为多项目 + 仓级中文名（cn）。",
+  "projects": [
+    {
+      "project": "中信底稿V5",
+      "root": "F:/idea-workspase-zhongXin-diGaoV5",
+      "exclude": [
+        "apache-tomcat-9.0.361",
+        "vue-ccbs",
+        "zx_file_check"
+      ],
+      "groups": [
+        {
+          "name": "底稿主仓",
+          "repos": [
+            { "dir": "standard_thdg_zxdm", "cn": "底稿主仓" },
+            { "dir": "standard_thdg_zxdm_react", "cn": "底稿前端" }
+          ]
+        },
+        {
+          "name": "流程引擎",
+          "repos": [
+            { "dir": "workingpaper-flow", "cn": "底稿流程引擎" }
+          ]
+        },
+        {
+          "name": "移动端",
+          "repos": [
+            { "dir": "MOBILE_DG_V1", "cn": "移动端应用" }
+          ]
+        },
+        {
+          "name": "文件中心",
+          "repos": [
+            { "dir": "fileCluster", "cn": "文件集群后端" },
+            { "dir": "fileCluster-react", "cn": "文件集群前端" }
+          ]
+        },
+        {
+          "name": "审计日志",
+          "repos": [
+            { "dir": "audit-log-system", "cn": "审计日志后端" },
+            { "dir": "audit-log-system-react", "cn": "审计日志前端" }
+          ]
+        },
+        {
+          "name": "Redis看板",
+          "repos": [
+            { "dir": "redis-dashboard", "cn": "Redis看板后端" },
+            { "dir": "redis-dashboard-react", "cn": "Redis看板前端" }
+          ]
+        },
+        {
+          "name": "集成中间件",
+          "repos": [
+            { "dir": "lanxum-integration", "cn": "集成服务" },
+            { "dir": "lanxum-mail-preview", "cn": "邮件预览服务" },
+            { "dir": "lanxum-websocket", "cn": "消息推送服务" }
+          ]
+        },
+        {
+          "name": "前端工具",
+          "repos": [
+            { "dir": "react_tree_jsp", "cn": "目录树组件" },
+            { "dir": "upload_vue", "cn": "上传组件" }
+          ]
+        }
+      ]
+    },
+    {
+      "project": "档案V6",
+      "root": "F:/idea-workspase-amispV6",
+      "exclude": [
+        "amisp-ops-panel"
+      ],
+      "groups": [
+        {
+          "name": "档案主仓",
+          "repos": [
+            { "dir": "lanxum-amisp-java", "cn": "AMISP后端·中信" },
+            { "dir": "lanxum-amisp-react", "cn": "AMISP前端" }
+          ]
+        },
+        {
+          "name": "珠海分支",
+          "repos": [
+            { "dir": "lanxum-amisp-java-zhongHai", "cn": "AMISP后端·中海" }
+          ]
+        },
+        {
+          "name": "下载器",
+          "repos": [
+            { "dir": "filedownload-tauri-migration", "cn": "高级下载器" }
+          ]
+        }
+      ]
+    }
+  ]
+}
