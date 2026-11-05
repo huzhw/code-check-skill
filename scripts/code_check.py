@@ -20,14 +20,17 @@ code-check 增量代码检查脚本
 仓库根 .code-check-rules.md 可放任意项目自己的规范，存在即提示加载。其他项目零配置，只走通用层。
 
 命令：
-    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--from 提交id] [--baseline] [--quiet]
+    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--from 提交id] [--baseline] [--quiet] [--all]
         扫描待检查改动（只列未检查的新项），输出精简清单（含过滤统计 + 检查分组）。
         --since：只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago。
         --from：从该提交起（含）往后查，如 acd4fef8。
         --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
         --quiet：只输出「N commit / M 文件待查」一行，供快速判断。
-    python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id]
+        --all：级联扫描工作区下所有登记仓（scripts/workspaces.txt 里的根目录 → 子目录中有
+               .code-check-project.toml 的 git 仓），逐仓输出，末尾汇总。
+    python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id] [--all]
         重查：列范围内所有项（含已查，全过滤的不列），每条带「已查 N 次」；check_count 随 mark 递增。
+        --all：级联重查所有登记仓。
     python code_check.py baseline [--author 姓名]
         刷库建基线：全部历史 commit 标记已检查（check_count=0 种子），不实际检查。
     python code_check.py mark [--commit <hash>]... [--file <路径>:<内容hash>]...
@@ -35,16 +38,26 @@ code-check 增量代码检查脚本
     python code_check.py status
         查看库记录数与检查次数。
     python code_check.py report-path [--commit <hash>]... [--work] [--recheck]
-        建报告目录 `.code-check-reports/` 并打印报告文件路径（日期_时间[_recheck][_共N个_最早~最新][+work]），AI 写内容。
+                            [--report-root 目录] [--project-name 中文名]
+        建报告目录并打印报告文件路径（日期_时间[_recheck][_共N个_最早~最新][+work]），AI 写内容。
+        --report-root：报告落到指定目录（级联模式用「工作区根/.code-check-reports」），默认被检查仓自己。
+        --project-name：项目中文名，进了报告文件名。
+    python code_check.py migrate-repo-id
+        把库里旧的 repo 键（remote 地址 / 绝对路径）改写成新的「remote#目录名」键，进度不丢。
 
 库位置：被检查项目 git 根目录下 `.code-check.db`（该文件加入 .gitignore，不入库）。
-repo 标识：git remote origin 地址优先，无 remote 用绝对路径。
+repo 标识：remote 地址（origin 优先、gitlab 次之）+ "#" + 仓库目录名；无 remote 用绝对路径 + "#目录名"。
+            拼目录名是为区分「同一 remote 的两个 clone」（如 lanxum-amisp-java 与 -zhongHai）。
+            旧键仍可被识别（查询时新旧键一起查），migrate-repo-id 可把旧键改写为新键。
+项目中文名：仓库根 .code-check-project.toml 里 name = "xxx"；缺文件则不纳入级联扫描。
 """
 
 import argparse
+import contextlib
 import datetime
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import re
@@ -54,6 +67,12 @@ import sys
 
 DB_FILENAME = ".code-check.db"
 REPORT_DIR_NAME = ".code-check-reports"
+
+# 项目中文名登记文件：仓库根 .code-check-project.toml，形如 name = "底稿主仓"
+PROJECT_CFG_NAME = ".code-check-project.toml"
+
+# 工作区清单：技能目录 scripts/workspaces.txt，每行一个工作区根目录（# 开头为注释）
+WORKSPACES_FILE = "workspaces.txt"
 
 # ---------------- 文件过滤（确定性排除，借鉴 OCR「精确文件选择」） ----------------
 
@@ -155,6 +174,10 @@ def classify_file(path):
 
 REPO_RULES_FILENAME = ".code-check-rules.md"
 
+# 项目规范文件：仓根存在即提示 AI 加载（团队规范常写在这里）。
+# 顺序即优先级，命中第一个就够；前面的优先。
+PROJECT_RULE_FILES = ("AGENTS.md", "CLAUDE.md")
+
 PROJECT_PROFILES = [
     # key → 特征列表。特征含 "/" 按相对路径判断存在；不含 "/" 按顶层目录名前缀判断（目录）
     ("wpcms", ("wpcms",)),
@@ -188,6 +211,16 @@ def repo_rules_file(root):
     """仓库根项目自定义规范文件，存在返回路径，否则 None。"""
     p = os.path.join(root, REPO_RULES_FILENAME)
     return p if os.path.isfile(p) else None
+
+
+def project_rule_files(root):
+    """仓根的团队规范文件（AGENTS.md / CLAUDE.md），返回存在的路径列表。"""
+    found = []
+    for name in PROJECT_RULE_FILES:
+        p = os.path.join(root, name)
+        if os.path.isfile(p):
+            found.append(p)
+    return found
 
 
 def group_files(files):
@@ -245,10 +278,110 @@ def repo_root(start="."):
 
 
 def repo_id(root):
-    """仓库标识：remote 地址优先，无 remote 用绝对路径。"""
-    out = git(root, "remote", "get-url", "origin", check=False)
-    url = out.strip()
-    return url if url else os.path.abspath(root)
+    """仓库标识：remote 地址 + "#" + 仓库目录名；无 remote 用绝对路径 + "#目录名"。
+
+    拼目录名是为区分「同一 remote 的两个 clone」——如 lanxum-amisp-java 与
+    lanxum-amisp-java-zhongHai 都指向 lanxum-amisp.git，键相同会导致一仓查过另一仓被跳过。
+    """
+    url = ""
+    for remote in ("origin", "gitlab"):
+        out = git(root, "remote", "get-url", remote, check=False).strip()
+        if out:
+            url = out
+            break
+    if not url:
+        url = os.path.normpath(os.path.abspath(root))
+    return "{}#{}".format(url, os.path.basename(os.path.normpath(root)))
+
+
+def legacy_repo_ids(root):
+    """旧版 repo 键（只有 remote 地址 / 绝对路径，无 #目录名）。用于兼容旧库记录。
+
+    绝对路径统一用 os.path.normpath 归一（Windows 下会变反斜杠），
+    否则跟库里存的老键（也是 normpath 过的）比不上，兼容就失效了。
+    """
+    out = git(root, "remote", "get-url", "origin", check=False).strip()
+    ids = []
+    if out:
+        ids.append(out)
+    abs_path = os.path.normpath(os.path.abspath(root))
+    if abs_path not in ids:
+        ids.append(abs_path)
+    return ids
+
+
+def read_project_name(root):
+    """读仓库根 .code-check-project.toml 的 name 字段。没有文件或没有 name 返回 None。
+
+    只做极简解析（key = "value" 单行），不引第三方依赖；引号会剥掉。
+    """
+    path = os.path.join(root, PROJECT_CFG_NAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip() != "name":
+                    continue
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                return value or None
+    except OSError:
+        return None
+    return None
+
+
+def discover_workspaces(script_dir):
+    """读 scripts/workspaces.txt，返回工作区根目录列表（存在的）。"""
+    path = os.path.join(script_dir, WORKSPACES_FILE)
+    roots = []
+    if not os.path.isfile(path):
+        return roots
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if os.path.isdir(line):
+                roots.append(os.path.abspath(line))
+            else:
+                print("⚠ 工作区根不存在，已跳过: {}".format(line), file=sys.stderr)
+    return roots
+
+
+def discover_repos(script_dir):
+    """级联发现所有登记仓。
+
+    判据：工作区根下的一层子目录，同时满足「是 git 仓」+「有 .code-check-project.toml」。
+    返回 [{root, name}]，按中文名排序；name 缺省用目录名。
+    """
+    repos = []
+    seen = set()
+    for ws in discover_workspaces(script_dir):
+        try:
+            entries = sorted(os.listdir(ws))
+        except OSError:
+            continue
+        for entry in entries:
+            path = os.path.join(ws, entry)
+            if not os.path.isdir(path) or path in seen:
+                continue
+            if not os.path.isdir(os.path.join(path, ".git")):
+                continue  # 非 git 仓（如 tomcat 运行时目录）
+            name = read_project_name(path)
+            if not name:
+                continue  # 未登记中文名 → 不纳入级联
+            seen.add(path)
+            repos.append({"root": path, "name": name})
+    repos.sort(key=lambda r: r["name"])
+    return repos
 
 
 # ---------------- 数据库 ----------------
@@ -317,12 +450,46 @@ def list_commits(root, author=None, since=None, from_commit=None):
     return commits
 
 
-def filter_new_commits(conn, repo, commits):
-    """去掉已检查的 commit。amend/rebase 改 hash 用 time+subject 二次兜底。"""
-    rows = conn.execute(
-        "SELECT commit_hash, commit_time, subject FROM checked_commits WHERE repo=?",
-        (repo,)).fetchall()
+def repo_key_set(root):
+    """本仓在库里的全部有效键：新键 + 旧键（兼容未迁移的老库记录）。"""
+    keys = [repo_id(root)]
+    for old in legacy_repo_ids(root):
+        if old not in keys:
+            keys.append(old)
+    return keys
+
+
+def resolve_hash(root, h):
+    """把短 hash 补成完整 40 位 SHA。库里存的必须是完整 SHA，否则跟 git log 的完整 hash 对不上，
+    会被误判成「没查过」而重复出现。取不到就原样返回。"""
+    h = (h or "").strip()
+    if len(h) == 40:
+        return h
+    try:
+        out = git(root, "rev-parse", "--verify", "--quiet", h + "^{commit}", check=False).strip()
+    except RuntimeError:
+        out = ""
+    return out or h
+
+
+def filter_new_commits(conn, repo, commits, root=None):
+    """去掉已检查的 commit。amend/rebase 改 hash 用 time+subject 二次兜底。
+
+    repo 可以是单个键，也可以是键列表（新键 + 旧键，一起查）。
+    """
+    keys = repo if isinstance(repo, (list, tuple)) else [repo]
+    rows = []
+    for k in keys:
+        rows += conn.execute(
+            "SELECT commit_hash, commit_time, subject FROM checked_commits WHERE repo=?",
+            (k,)).fetchall()
     checked_hash = {r[0] for r in rows}
+    # 兼容库里存的是短 hash 的老记录：补全成完整 SHA 再比对
+    if root:
+        for h in [x for x in checked_hash if len(x) != 40]:
+            full = resolve_hash(root, h)
+            if full:
+                checked_hash.add(full)
     checked_ts = {(r[1], r[2]) for r in rows}
     new = []
     for c in commits:
@@ -335,19 +502,29 @@ def filter_new_commits(conn, repo, commits):
 
 
 def commit_check_count(conn, repo, commit_hash):
-    """某 commit 已检查次数（0=未检查）。"""
-    row = conn.execute(
-        "SELECT check_count FROM checked_commits WHERE repo=? AND commit_hash=?",
-        (repo, commit_hash)).fetchone()
-    return row[0] if row else 0
+    """某 commit 已检查次数（0=未检查）。repo 可为键或键列表。"""
+    keys = repo if isinstance(repo, (list, tuple)) else [repo]
+    best = 0
+    for k in keys:
+        row = conn.execute(
+            "SELECT check_count FROM checked_commits WHERE repo=? AND commit_hash=?",
+            (k, commit_hash)).fetchone()
+        if row:
+            best = max(best, row[0])
+    return best
 
 
 def file_check_count(conn, repo, path, content_hash):
-    """某文件改动已检查次数（0=未检查）。"""
-    row = conn.execute(
-        "SELECT check_count FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
-        (repo, path, content_hash)).fetchone()
-    return row[0] if row else 0
+    """某文件改动已检查次数（0=未检查）。repo 可为键或键列表。"""
+    keys = repo if isinstance(repo, (list, tuple)) else [repo]
+    best = 0
+    for k in keys:
+        row = conn.execute(
+            "SELECT check_count FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
+            (k, path, content_hash)).fetchone()
+        if row:
+            best = max(best, row[0])
+    return best
 
 
 def do_baseline(conn, rid, root, author=None):
@@ -451,9 +628,100 @@ def split_files_by_ignore(files, patterns):
     return valid, filtered
 
 
+def cmd_scan_all(args, mode):
+    """级联扫描/重查所有登记仓。
+
+    遍历 scripts/workspaces.txt 里的工作区根 → 一层子目录中「是 git 仓 且 有
+    .code-check-project.toml」的仓，逐仓跑 scan/recheck，末尾汇总。
+    报告落位：<工作区根>/.code-check-reports/，与调用 skill 时所在目录无关。
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repos = discover_repos(script_dir)
+    if not repos:
+        print("❌ 未发现任何登记仓。检查 {} 与各仓根 {}".format(
+            os.path.join(script_dir, WORKSPACES_FILE), PROJECT_CFG_NAME))
+        return
+
+    print("=" * 60)
+    print("code-check {}：级联 {} 个仓".format(mode, len(repos)))
+    print("=" * 60)
+    print()
+
+    total_commit = 0
+    total_file = 0
+    touched = []
+    for repo in repos:
+        root = repo["root"]
+        name = repo["name"]
+        # 报告落点：工作区根（root 的上级），与调用点无关
+        ws_root = os.path.dirname(os.path.normpath(root))
+        report_root = os.path.join(ws_root, REPORT_DIR_NAME)
+
+        sub = argparse.Namespace(**vars(args))
+        sub.repo_dir = root
+        sub.title = "{}（{}）".format(name, os.path.basename(os.path.normpath(root)))
+        sub.suppress_mark = True
+        sub.all = False
+
+        if mode == "扫描":
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                cmd_scan(sub)
+            text = buf.getvalue()
+            n_commit = 0
+            n_file = 0
+            for line in text.splitlines():
+                if line.startswith("待查："):
+                    m = re.search(r"待查：(\d+) 个 commit，(\d+) 个工作区文件", line)
+                    if m:
+                        n_commit, n_file = int(m.group(1)), int(m.group(2))
+            total_commit += n_commit
+            total_file += n_file
+            if n_commit or n_file:
+                touched.append((name, root, n_commit, n_file, report_root))
+                print(text.rstrip())
+                print()
+            else:
+                print("✅ {}：没有新改动".format(name))
+                print()
+        else:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                cmd_recheck(sub)
+            text = buf.getvalue()
+            n_commit = 0
+            for line in text.splitlines():
+                if line.startswith("范围："):
+                    m = re.search(r"范围：(\d+) 个 commit，(\d+) 个工作区文件", line)
+                    if m:
+                        n_commit = int(m.group(1))
+            total_commit += n_commit
+            if n_commit:
+                touched.append((name, root, n_commit, 0, report_root))
+                print(text.rstrip())
+                print()
+            else:
+                print("✅ {}：该范围内无改动".format(name))
+                print()
+
+    print("=" * 60)
+    print("汇总：{} 个仓，有改动的 {} 个，共 {} 个 commit / {} 个工作区文件".format(
+        len(repos), len(touched), total_commit, total_file))
+    if touched:
+        print()
+        print("有改动的仓（报告落位：<工作区根>/{}/）".format(REPORT_DIR_NAME))
+        for name, root, nc, nf, rr in touched:
+            print("  · {}（{}）→ {}".format(
+                name, os.path.basename(os.path.normpath(root)), rr))
+    print("=" * 60)
+
+
 def cmd_scan(args):
     root = repo_root(args.repo_dir)
+    if args.all:
+        return cmd_scan_all(args, "扫描")
     rid = repo_id(root)
+    keys = repo_key_set(root)
     db_path = os.path.join(root, DB_FILENAME)
     conn = init_db(db_path)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -475,7 +743,7 @@ def cmd_scan(args):
         n = do_baseline(conn, rid, root, args.author)
         if not args.json:
             print("📌 已建立基线：标记 {} 个历史 commit 为已检查（check_count=0 种子，未实际检查）".format(n))
-    new_commits = filter_new_commits(conn, rid, commits)
+    new_commits = filter_new_commits(conn, keys, commits, root)
     commit_detail = []
     skipped_commits = []  # 文件全被过滤的 commit，无需检查直接标记
     for c in new_commits:
@@ -513,9 +781,11 @@ def cmd_scan(args):
         h = file_content_hash(root, path)
         if h is None:
             continue
-        rows = conn.execute(
-            "SELECT 1 FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
-            (rid, path, h)).fetchall()
+        rows = []
+        for k in keys:
+            rows += conn.execute(
+                "SELECT 1 FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
+                (k, path, h)).fetchall()
         work_detail.append({"status": status, "path": path,
                             "content_hash": h, "checked_before": bool(rows)})
 
@@ -549,7 +819,7 @@ def cmd_scan(args):
         return
 
     print("=" * 50)
-    print("code-check 扫描：{}".format(os.path.basename(os.path.normpath(root))))
+    print("code-check 扫描：{}".format(getattr(args, "title", None) or os.path.basename(os.path.normpath(root))))
     print("=" * 50)
     print("待查：{} 个 commit，{} 个工作区文件".format(n_new_commit, n_new_file))
     if n_filtered_total:
@@ -564,6 +834,8 @@ def cmd_scan(args):
         print("项目档案：无 → 仅用通用规则（团队规范可写仓库根 {}）".format(REPO_RULES_FILENAME))
     if custom_rules:
         print("项目自定义规范：{} → 加载".format(custom_rules))
+    for pf in project_rule_files(root):
+        print("项目团队规范：{} → 加载（该仓规则以它为准）".format(pf))
     if n_new_commit == 0 and n_new_file == 0:
         if skipped_commits:
             print("⚠ 有效改动为 0（仅剩全过滤 commit，见下），未检查不标记。")
@@ -614,6 +886,8 @@ def cmd_scan(args):
         print()
 
     print("—— 检查完写回标记（AI 用）——")
+    if getattr(args, "suppress_mark", False):
+        return
     for c in commit_detail:
         print("  mark --commit {hash}".format(hash=c["hash"]))
     for c in skipped_commits:
@@ -625,11 +899,13 @@ def cmd_scan(args):
 def cmd_mark(args):
     root = repo_root(args.repo_dir)
     rid = repo_id(root)
+    keys = repo_key_set(root)
     db_path = os.path.join(root, DB_FILENAME)
     conn = init_db(db_path)
 
     n_commit = 0
     for h in args.commit:
+        h = resolve_hash(root, h)  # 短 hash 补全成完整 SHA，保证与 git log 对得上
         # 回填 commit 元信息
         row = None
         try:
@@ -638,16 +914,19 @@ def cmd_mark(args):
             row = (t, a, s)
         except RuntimeError:
             pass
-        exists = conn.execute(
-            "SELECT 1 FROM checked_commits WHERE repo=? AND commit_hash=?",
-            (rid, h)).fetchone()
-        if exists:
-            # 重复标记 → 次数 +1（重查）
-            conn.execute(
-                "UPDATE checked_commits SET check_count = check_count + 1, checked_at = ? "
-                "WHERE repo=? AND commit_hash=?",
-                (now(), rid, h))
-        else:
+        # 新键 + 旧键都要看：老库记录在旧键下，不能因换键就重复插入一条新的
+        exists = False
+        for k in keys:
+            if conn.execute(
+                    "SELECT 1 FROM checked_commits WHERE repo=? AND commit_hash=?",
+                    (k, h)).fetchone():
+                exists = True
+                # 重复标记 → 次数 +1（重查），所有键下的同一 commit 同步递增
+                conn.execute(
+                    "UPDATE checked_commits SET check_count = check_count + 1, checked_at = ? "
+                    "WHERE repo=? AND commit_hash=?",
+                    (now(), k, h))
+        if not exists:
             conn.execute(
                 "INSERT INTO checked_commits"
                 "(repo, commit_hash, commit_time, author, subject, checked_at, check_count)"
@@ -662,15 +941,17 @@ def cmd_mark(args):
             print("⚠ 跳过非法 --file 参数: {}".format(spec), file=sys.stderr)
             continue
         path, h = spec.rsplit(":", 1)
-        exists = conn.execute(
-            "SELECT 1 FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
-            (rid, path, h)).fetchone()
-        if exists:
-            conn.execute(
-                "UPDATE checked_files SET check_count = check_count + 1, checked_at = ? "
-                "WHERE repo=? AND file_path=? AND content_hash=?",
-                (now(), rid, path, h))
-        else:
+        exists = False
+        for k in keys:
+            if conn.execute(
+                    "SELECT 1 FROM checked_files WHERE repo=? AND file_path=? AND content_hash=?",
+                    (k, path, h)).fetchone():
+                exists = True
+                conn.execute(
+                    "UPDATE checked_files SET check_count = check_count + 1, checked_at = ? "
+                    "WHERE repo=? AND file_path=? AND content_hash=?",
+                    (now(), k, path, h))
+        if not exists:
             conn.execute(
                 "INSERT INTO checked_files"
                 "(repo, file_path, content_hash, checked_at, check_count)"
@@ -686,7 +967,10 @@ def cmd_mark(args):
 def cmd_recheck(args):
     """重查：列范围内所有项（含已查），每条带「已查 N 次」。未指定范围则报错提示。"""
     root = repo_root(args.repo_dir)
+    if args.all:
+        return cmd_scan_all(args, "重查")
     rid = repo_id(root)
+    keys = repo_key_set(root)
     db_path = os.path.join(root, DB_FILENAME)
     conn = init_db(db_path)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -718,7 +1002,7 @@ def cmd_recheck(args):
             "hash": c["hash"], "time": c["time"], "author": c["author"],
             "subject": c["subject"], "files": valid, "filtered_files": filtered,
             "groups": group_files(valid),
-            "count": commit_check_count(conn, rid, c["hash"]),
+            "count": commit_check_count(conn, keys, c["hash"]),
         })
 
     try:
@@ -738,10 +1022,10 @@ def cmd_recheck(args):
         if h is None:
             continue
         work_rows.append({"status": status, "path": path,
-                          "content_hash": h, "count": file_check_count(conn, rid, path, h)})
+                          "content_hash": h, "count": file_check_count(conn, keys, path, h)})
 
     print("=" * 50)
-    print("code-check 重查：{}".format(os.path.basename(os.path.normpath(root))))
+    print("code-check 重查：{}".format(getattr(args, "title", None) or os.path.basename(os.path.normpath(root))))
     print("=" * 50)
     print("范围：{} 个 commit，{} 个工作区文件".format(len(commit_rows), len(work_rows)))
     profile = detect_project_profile(root)
@@ -751,6 +1035,8 @@ def cmd_recheck(args):
             profile, os.path.join(script_dir, "rules", "profile-{}.md".format(profile))))
     if custom_rules:
         print("项目自定义规范：{} → 加载".format(custom_rules))
+    for pf in project_rule_files(root):
+        print("项目团队规范：{} → 加载（该仓规则以它为准）".format(pf))
     if not commit_rows and not work_rows:
         print("该范围内无改动（或全被过滤）。")
         return
@@ -781,6 +1067,8 @@ def cmd_recheck(args):
         print()
 
     print("—— 检查完写回标记（AI 用），重复 mark 次数 +1 ——")
+    if getattr(args, "suppress_mark", False):
+        return
     for c in commit_rows:
         print("  mark --commit {hash}".format(hash=c["hash"]))
     for f in work_rows:
@@ -801,24 +1089,31 @@ def cmd_baseline(args):
 def cmd_status(args):
     root = repo_root(args.repo_dir)
     rid = repo_id(root)
+    keys = repo_key_set(root)
     db_path = os.path.join(root, DB_FILENAME)
     if not os.path.exists(db_path):
         print("库不存在：{}（还没 scan 过）".format(db_path))
         return
     conn = init_db(db_path)
-    n_commit = conn.execute(
-        "SELECT COUNT(*) FROM checked_commits WHERE repo=?", (rid,)).fetchone()[0]
-    n_commit_real = conn.execute(
-        "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND check_count>=1",
-        (rid,)).fetchone()[0]
-    n_commit_multi = conn.execute(
-        "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND check_count>=2",
-        (rid,)).fetchone()[0]
-    n_file = conn.execute(
-        "SELECT COUNT(*) FROM checked_files WHERE repo=?", (rid,)).fetchone()[0]
-    n_file_real = conn.execute(
-        "SELECT COUNT(*) FROM checked_files WHERE repo=? AND check_count>=1",
-        (rid,)).fetchone()[0]
+    n_commit = 0
+    n_commit_real = 0
+    n_commit_multi = 0
+    n_file = 0
+    n_file_real = 0
+    for k in keys:
+        n_commit += conn.execute(
+            "SELECT COUNT(*) FROM checked_commits WHERE repo=?", (k,)).fetchone()[0]
+        n_commit_real += conn.execute(
+            "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND check_count>=1",
+            (k,)).fetchone()[0]
+        n_commit_multi += conn.execute(
+            "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND check_count>=2",
+            (k,)).fetchone()[0]
+        n_file += conn.execute(
+            "SELECT COUNT(*) FROM checked_files WHERE repo=?", (k,)).fetchone()[0]
+        n_file_real += conn.execute(
+            "SELECT COUNT(*) FROM checked_files WHERE repo=? AND check_count>=1",
+            (k,)).fetchone()[0]
     last = conn.execute(
         "SELECT MAX(checked_at) FROM checked_commits").fetchone()[0]
     print("repo      :", rid)
@@ -839,21 +1134,38 @@ def commit_time(root, commit):
         return ""
 
 
+def sanitize_name(name):
+    """去掉文件名非法字符，中文名直接用。返回可安全落盘的名字。"""
+    if not name:
+        return ""
+    name = re.sub(r'[<>:"/\\|?*]', "_", name).strip().strip(".")
+    return name
+
+
 def cmd_report_path(args):
     """建报告目录 + 算报告文件名，打印目标路径。AI 负责写报告内容。
 
-    文件名：日期_时间[_recheck][_共N个_最早~最新][+work].md，如 20260803_103000_共24个_e455b7b~db5a92f.md。
+    文件名：日期_时间[_项目中文名][_recheck][_共N个_最早~最新][+work].md，
+            如 20260803_103000_底稿主仓_recheck_共24个_e455b7b~db5a92f.md。
     起止取本次 --commit 里按提交时间最早/最晚的短 hash（按时间排序，非传参顺序），体现「提交次数 + 范围」；
     单 commit 只列其 hash。撞名自动追加 _2/_3，避免同秒多次检查互相覆盖。无内容可报时（无 commit 也无工作区改动）报错不建。
+    --report-root：报告落到指定目录（级联模式用「工作区根/.code-check-reports」）；不传则写被检查仓自己。
+    --project-name：项目中文名，进了报告文件名。
     """
     root = repo_root(args.repo_dir)
     if not args.commit and not args.work:
         print("❌ 无可报告内容：需 --commit 或 --work（无新改动不写报告文件）", file=sys.stderr)
         return
-    report_dir = os.path.join(root, REPORT_DIR_NAME)
+    if args.report_root:
+        report_dir = os.path.abspath(args.report_root)
+    else:
+        report_dir = os.path.join(root, REPORT_DIR_NAME)
     os.makedirs(report_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     name = ts
+    proj = sanitize_name(getattr(args, "project_name", None))
+    if proj:
+        name += "_" + proj
     if args.recheck:
         name += "_recheck"
     if args.commit:
@@ -875,6 +1187,47 @@ def cmd_report_path(args):
         path = "{}_{}{}".format(base, counter, ext)
         counter += 1
     print(path)
+
+
+def cmd_migrate_repo_id(args):
+    """把库里旧的 repo 键改写成新的「remote#目录名」键，进度不丢。
+
+    旧键只有两种：remote 地址（origin 优先）、绝对路径。新键在其后加 "#目录名"。
+    只在「旧键存在且新键不存在」时改写；两者都在则保持不动（避免计数错乱）。
+    """
+    root = repo_root(args.repo_dir)
+    db_path = os.path.join(root, DB_FILENAME)
+    if not os.path.exists(db_path):
+        print("库不存在：{}（无需迁移）".format(db_path))
+        return
+    new_id = repo_id(root)
+    conn = init_db(db_path)
+    changed = 0
+    for old in legacy_repo_ids(root):
+        if old == new_id:
+            continue
+        # 新键下已有该 commit → 旧键的记录是重复，删掉旧的
+        dup = conn.execute(
+            "SELECT COUNT(*) FROM checked_commits WHERE repo=? AND commit_hash IN "
+            "(SELECT commit_hash FROM checked_commits WHERE repo=?)",
+            (new_id, old)).fetchone()[0]
+        if dup:
+            conn.execute("DELETE FROM checked_commits WHERE repo=?", (old,))
+        else:
+            conn.execute("UPDATE checked_commits SET repo=? WHERE repo=?", (new_id, old))
+        changed += conn.total_changes and 1 or 0
+        dupf = conn.execute(
+            "SELECT COUNT(*) FROM checked_files WHERE repo=? AND file_path IN "
+            "(SELECT file_path FROM checked_files WHERE repo=?)",
+            (new_id, old)).fetchone()[0]
+        if dupf:
+            conn.execute("DELETE FROM checked_files WHERE repo=?", (old,))
+        else:
+            conn.execute("UPDATE checked_files SET repo=? WHERE repo=?", (new_id, old))
+    conn.commit()
+    total = conn.execute("SELECT COUNT(*) FROM checked_commits WHERE repo=?", (new_id,)).fetchone()[0]
+    conn.close()
+    print("✅ 已迁移：{} → {}（该仓现 {} 条 commit 记录）".format(root, new_id, total))
 
 
 # ---------------- 入口 ----------------
@@ -906,6 +1259,9 @@ def main():
     p_scan.add_argument("--baseline", action="store_true",
                         help="首次使用建基线：把当前全部历史 commit 标记为已检查，"
                              "之后只查基线后新出现的 commit + 未提交工作区改动")
+    p_scan.add_argument("--all", action="store_true",
+                        help="级联扫描所有登记仓（scripts/workspaces.txt 里的工作区根 → 子目录中"
+                             "有 .code-check-project.toml 的 git 仓）")
 
     p_recheck = sub.add_parser("recheck", help="重查：列范围内所有项（含已查）带次数")
     p_recheck.add_argument("--author", default=None, help="只查该作者的提交")
@@ -913,6 +1269,8 @@ def main():
                            help="只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago")
     p_recheck.add_argument("--from", dest="from_commit", default=None,
                            help="从该提交起（含）往后查，如 acd4fef8")
+    p_recheck.add_argument("--all", action="store_true",
+                           help="级联重查所有登记仓")
 
     p_baseline = sub.add_parser("baseline", help="刷库建基线：标记全部历史 commit，不检查")
     p_baseline.add_argument("--author", default=None, help="只标记该作者的提交")
@@ -924,12 +1282,20 @@ def main():
                         help="标记文件已检查，格式 路径:内容hash，可多次")
 
     sub.add_parser("status", help="查看库记录数与检查次数")
+    sub.add_parser("migrate-repo-id",
+                   help="把库里旧的 repo 键（remote 地址 / 绝对路径）改写成新键「remote#目录名」，"
+                        "进度不丢")
 
     p_report = sub.add_parser("report-path", help="建报告目录并打印报告文件路径（AI 写内容）")
     p_report.add_argument("--commit", action="append", default=[],
                           help="本次检查的 commit 短hash，可多次")
     p_report.add_argument("--work", action="store_true", help="本次含工作区改动")
     p_report.add_argument("--recheck", action="store_true", help="重查报告，文件名加 recheck_ 前缀")
+    p_report.add_argument("--report-root", default=None,
+                          help="报告落到指定目录（级联模式用「工作区根/.code-check-reports」），"
+                               "默认写被检查仓自己")
+    p_report.add_argument("--project-name", default=None,
+                          help="项目中文名，进了报告文件名")
 
     args = parser.parse_args()
     if args.command == "scan":
@@ -944,6 +1310,8 @@ def main():
         cmd_status(args)
     elif args.command == "report-path":
         cmd_report_path(args)
+    elif args.command == "migrate-repo-id":
+        cmd_migrate_repo_id(args)
     else:
         parser.print_help()
 
