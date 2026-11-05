@@ -35,13 +35,14 @@ SQLite 已查记录 ┘         未提交工作区改动 ──┘
 `{技能目录}/scripts/code_check.py`，Python 标准库 sqlite3，零第三方依赖。
 
 ```bash
-python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id]   # 扫描待检查改动（只列未检查的新项）
-python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> recheck [--since 时间] [--from 提交id]   # 重查：列范围内所有项（含已查）带次数
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id] [--all]   # 扫描待检查改动（只列未检查的新项）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> recheck [--since 时间] [--from 提交id] [--all]   # 重查：列范围内所有项（含已查）带次数
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> baseline                                   # 刷库建基线：标记全部历史，不检查
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ...                 # 标记 commit 已检查（重复标记次数+1）
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> mark --file <路径>:<内容hash> ...         # 标记文件已检查
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> status                                   # 查看库记录数与检查次数
-python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path [--commit <hash>]... [--work] [--recheck]   # 建报告目录并打印报告文件路径（AI 写内容）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> migrate-repo-id                          # 旧 repo 键改写为新键（换键后进度不丢）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path [--commit <hash>]... [--work] [--recheck] [--report-root 目录] [--project-name 中文名]   # 建报告目录并打印报告文件路径（AI 写内容）
 ```
 
 **检查次数（check_count）**：每个 commit/工作区文件记录被检查次数。`mark` 首次=1，重复标记 +1。
@@ -59,6 +60,47 @@ python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path [-
 | `/code-recheck-yesterday` | `recheck --since yesterday` | 重查昨天（列全部带次数） |
 | `/code-recheck-from <commitId>` | `recheck --from <commitId>` | 重查从某提交起 |
 | `/code-check-history` | `baseline` | 刷库建基线（不检查） |
+
+---
+
+## 级联多仓（--all）
+
+一个工作区根下有多个项目仓时，用 `--all` 一次扫全部：
+
+```bash
+python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> scan --all
+python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> recheck --all --since today
+```
+
+**纳入判据**（两条都满足才算）：① 在 `scripts/workspaces.txt` 列出的工作区根的一层子目录下；② 是 git 仓且仓根有 `.code-check-project.toml`。
+**没登记 `.code-check-project.toml` 的仓一律不进 --all**（如 tomcat 运行时目录、非目标项目），要加仓就在该仓根建一个写中文名的 toml。
+
+**项目中文名**：仓根 `.code-check-project.toml`，内容就一行：
+
+```toml
+name = "底稿主仓"
+```
+
+**报告落位（与调用点无关）**：级联模式下报告落到 `<工作区根>/.code-check-reports/`，平铺一个目录、文件名带中文名：
+
+```
+20261105_221822_底稿主仓_recheck_5d938dc.md
+```
+
+调用 skill 时所在的目录是哪个仓**不影响**结果 —— 在主仓敲还是在引擎仓敲，扫的都是同一批仓、报告都落同样位置。
+
+**报告路径生成**（`report-path`）：
+
+```bash
+# 级联：落工作区根，带中文名
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓> report-path --commit <hash>... --recheck \
+  --report-root "F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports" --project-name "底稿主仓"
+# 单仓（不带新参数）：仍写被检查仓自己的 .code-check-reports/，行为不变
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓> report-path --commit <hash>...
+```
+
+**repo 标识**：remote 地址（origin 优先、gitlab 次之）+ `#` + 仓库目录名。拼目录名是为区分「同一 remote 的两个 clone」（如 `lanxum-amisp-java` 与 `lanxum-amisp-java-zhongHai` 都指向 `lanxum-amisp.git`），不拼会串号 —— 一仓查过的 commit 在另一仓被当成已查过直接跳过。
+旧键（只有 remote 地址 / 绝对路径）仍被兼容查询；`migrate-repo-id` 可把旧键改写成新键，19 个仓已迁完。
 
 ---
 
@@ -126,6 +168,7 @@ python "{技能目录}/scripts/code_check.py" scan
 1. 取报告路径：`python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path --commit <hash>... [--work] [--recheck]`
    - `--commit`：本次检查的所有 commit 短 hash，可多个；本次含工作区改动加 `--work`；重查加 `--recheck`
    - 脚本在 `<仓库git根>/.code-check-reports/`（与 .code-check.db 同级）建目录，按「日期_时间[_recheck][_共N个_最早~最新][+work]」自动命名（如 `20260803_103000_共24个_e455b7b~db5a92f.md`），起止取本次 commit 按提交时间最早/最晚的短 hash；撞名自动追加 `_2`，打印出目标路径
+   - **级联（--all）时**：加 `--report-root "<工作区根>/.code-check-reports" --project-name "<中文名>"`，报告落工作区根、文件名带中文名；不带这两个参数仍是旧行为（写被检查仓自己）
 2. 用 Write 工具把下面格式的完整报告写到该路径（用第 1 步打印的绝对路径）
 3. 对话只输出一行：`📄 报告：{路径}` + 结论行（如「⚠️ 需处理 2 个（X1、X2），无紧急」）
 

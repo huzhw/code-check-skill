@@ -38,9 +38,10 @@
 - **刷库建基线** — `baseline` 老仓库一次性归档全部历史，不实际检查
 - **数据表操作清单** — 报告列出本次 diff 实际涉及的库·表·操作，**UPDATE/DELETE/MERGE 重点核对：变更字段 + 定位条件（WHERE/ON）**，INSERT 仅核对表名
 - **多项目隔离** — `repo` 字段区分仓库，各项目检查进度互不影响
+- **级联多仓（`--all`）** — 一次扫工作区下所有登记仓，19 个项目一起查；每个仓带中文名，报告统一落工作区根
 - **已提交 + 未提交全覆盖** — 新 commit 和未提交的工作区改动都查
 - **amend/rebase 免疫** — hash 变了按「时间+提交说明」兜底去重，不重查
-- **报告落盘** — 完整报告写入被检查项目 `.code-check-reports/` 目录，文件名带日期、时间、提交次数与起止 commit
+- **报告落盘** — 完整报告写入报告目录，文件名带日期、时间、项目中文名、提交次数与起止 commit
 - **零依赖** — Python 标准库 sqlite3，不用装包
 
 ## 命令族（同仓库 8 个 skill）
@@ -55,6 +56,37 @@
 | `/code-recheck-yesterday` | `recheck --since yesterday` | 重查昨天（列全部带次数） |
 | `/code-recheck-from <commitId>` | `recheck --from <commitId>` | 重查从某提交起 |
 | `/code-check-history` | `baseline` | 刷库建基线（不检查） |
+
+所有命令都可加 `--all` 做级联多仓扫描。
+
+## 级联多仓
+
+一个工作区根下有多个项目仓时，`--all` 一次全查：
+
+```bash
+python scripts/code_check.py --repo-dir <任意仓> scan --all
+python scripts/code_check.py --repo-dir <任意仓> recheck --all --since today
+```
+
+**纳入判据**（两条都满足）：① 在 `scripts/workspaces.txt` 列出的工作区根的一层子目录下；② 是 git 仓且仓根有 `.code-check-project.toml`。
+
+**项目中文名**：仓根 `.code-check-project.toml` 写一行即可：
+
+```toml
+name = "底稿主仓"
+```
+
+没登记 toml 的仓一律不进 `--all` —— 要加仓就在该仓根建一个。
+
+**报告落位与调用点无关**：级联模式下报告落 `<工作区根>/.code-check-reports/`，平铺一个目录、文件名带中文名：
+
+```
+20261105_221822_底稿主仓_recheck_5d938dc.md
+```
+
+在主仓敲还是在引擎仓敲，扫的都是同一批仓、报告都落同样位置。
+
+**repo 标识**：`remote 地址 + # + 仓库目录名`。拼目录名是为区分「同一 remote 的两个 clone」（如 `lanxum-amisp-java` 与 `lanxum-amisp-java-zhongHai` 都指向 `lanxum-amisp.git`），不拼会串号 —— 一仓查过的 commit 在另一仓被当成已查过直接跳过。旧键仍兼容查询，`migrate-repo-id` 可把旧键改写成新键。
 
 **检查次数**：每个 commit/文件记录被检查次数，`mark` 首次=1、重复 +1。重要需求用 `recheck` 多查几轮，简单需求一次就够。
 

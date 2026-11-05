@@ -12,11 +12,16 @@ motto: "增量检查不是偷懒——查过的记下来，只碰新代码。"
 
 ## 流程
 0. **先读主技能**：`Read F:/idea-workspase-skills/code-check/SKILL.md`，拿分组检查规则（rules/*.md 加载方式）、报告格式、严禁清单后再开始
-1. **扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> scan --since yesterday`
+1. **扫描**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> scan --since yesterday --all`
 2. **逐组检查**：对列出的每个 commit / 工作区文件，按 scan 输出的分组逐组过，每组先 Read 对应 `{技能目录}/rules/xxx.md`（rules/general.md 恒加载），每条隐患给出 文件:行号 + 锚点片段 + 问题 + 改法，拿不准标「待确认」
 3. **报告**：结论置顶、按「⚠️需处理 / 🔶待确认 / ✅通过」分组
 4. **标记写回**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ... --file <路径>:<内容hash> ...`
 5. **复查**：`scan --since yesterday --quiet` 应显示无待查
+
+**级联多仓**：本命令也支持 `--all`（一次扫 `scripts/workspaces.txt` 里所有登记仓）。
+用户说「检查所有项目」「把几个仓都查一遍」时，在命令后加 `--all`。
+纳入判据：工作区根下一层子目录里「是 git 仓 且 仓根有 `.code-check-project.toml`」的仓。
+报告落 `<工作区根>/.code-check-reports/`，文件名带项目中文名（`--report-root` + `--project-name`）。
 
 ## 说明
 - 只列未检查的新项；昨天已检查过的，二次检查用 `/code-recheck-yesterday`
