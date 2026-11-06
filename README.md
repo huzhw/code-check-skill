@@ -39,7 +39,7 @@
 - **刷库建基线** — `baseline` 老仓库一次性归档全部历史，不实际检查
 - **数据表操作清单** — 报告列出本次 diff 实际涉及的库·表·操作，**UPDATE/DELETE/MERGE 重点核对：变更字段 + 定位条件（WHERE/ON）**，INSERT 仅核对表名
 - **多项目隔离** — `repo` 字段区分仓库，各项目检查进度互不影响
-- **级联多仓（`--all`）** — 一次扫工作区下所有登记仓，19 个项目一起查；每个仓带中文名，报告统一落工作区根
+- **级联多仓（`--all`）** — 一次扫**一套系统**登记的全部仓（底稿 15 个 / 档案 4 个），每套各扫各的；每个仓带中文名，报告落该套系统的工作区根
 - **已提交 + 未提交全覆盖** — 新 commit 和未提交的工作区改动都查
 - **amend/rebase 免疫** — hash 变了按「时间+提交说明」兜底去重，不重查
 - **报告落盘** — 完整报告写入报告目录，文件名带日期、时间、项目中文名、提交次数与起止 commit
@@ -58,16 +58,24 @@
 | `/code-recheck-from <commitId>` | `recheck --from <commitId>` | 重查从某提交起 |
 | `/code-check-history` | `baseline` | 刷库建基线（不检查） |
 
-所有命令都可加 `--all` 做级联多仓扫描。
+所有命令都可加 `--all` 做级联多仓扫描（一次一套系统）。
 
 ## 级联多仓
 
-一个工作区根下有多个项目仓时，`--all` 一次全查：
+一套系统的工作区根下有多个项目仓时，`--all` 一次扫这套系统的全部仓：
 
 ```bash
 python scripts/code_check.py --repo-dir <任意仓> scan --all
 python scripts/code_check.py --repo-dir <任意仓> recheck --all --since today
 ```
+
+**范围（两套系统互不越界）**：`scripts/projects.json` 里每个 `projects[].project` 是一套独立系统（本机现有「中信底稿V5」「档案V6」）。`--all` 每次只扫一套：
+
+| 情形 | 扫哪些仓 |
+|---|---|
+| 默认（不点名） | `--repo-dir` 锚点所在的那套：在底稿的仓里敲只扫底稿，在档案的仓里敲只扫档案 |
+| 锚点不在任何登记系统里 | 直接报错并列出可选系统名，不静默扫全部 |
+| 加 `--system <系统名>` | 显式点名的那套，跨系统才用 |
 
 **纳入判据**：读技能目录 `scripts/projects.json`（格式仿 `legacy-audit.projects.json`，扩展为多项目 + 仓级中文名）。配置里没有的仓一律不进 `--all`。
 
@@ -96,13 +104,13 @@ python scripts/code_check.py --repo-dir <任意仓> recheck --all --since today
 
 `cn` = 仓库中文名（报告文件名用），`groups[].name` = 分组名（报告目录分层用）。`repos` 也接受纯字符串，无中文名时用目录名兜底。
 
-**报告落位与调用点无关**：级联模式下报告落 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
+**报告落位**：级联模式下报告落 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
 
 ```
 F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓/20261105_221822_底稿主仓_recheck_5d938dc.md
 ```
 
-在主仓敲还是在引擎仓敲，扫的都是同一批仓、报告都落同样位置。
+落位只跟仓所属项目有关（底稿报告永远在底稿项目根下、档案永远在档案项目根下），与在哪敲无关。
 
 **repo 标识**：`remote 地址 + # + 仓库目录名`。拼目录名是为区分「同一 remote 的两个 clone」（如 `lanxum-amisp-java` 与 `lanxum-amisp-java-zhongHai` 都指向 `lanxum-amisp.git`），不拼会串号 —— 一仓查过的 commit 在另一仓被当成已查过直接跳过。旧键仍兼容查询，`migrate-repo-id` 可把旧键改写成新键。
 
@@ -271,3 +279,5 @@ git clone https://github.com/huzhw/code-check-skill.git ~/.claude/skills/code-ch
 ## 许可
 
 MIT
+
+最后修改：2026-11-06

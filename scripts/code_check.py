@@ -20,16 +20,20 @@ code-check 增量代码检查脚本
 仓库根 .code-check-rules.md 可放任意项目自己的规范，存在即提示加载。其他项目零配置，只走通用层。
 
 命令：
-    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--from 提交id] [--baseline] [--quiet] [--all]
+    python code_check.py scan [--author 姓名] [--json] [--since 时间] [--from 提交id] [--baseline] [--quiet]
+                              [--all] [--system 系统名]
         扫描待检查改动（只列未检查的新项），输出精简清单（含过滤统计 + 检查分组）。
         --since：只查该时间之后的提交，如 today / 2026-08-06 / 3 days ago。
         --from：从该提交起（含）往后查，如 acd4fef8。
         --baseline：首次使用建基线，把当前全部历史 commit 标记为已检查，只查之后的新改动。
         --quiet：只输出「N commit / M 文件待查」一行，供快速判断。
-        --all：级联扫描所有登记仓（scripts/projects.json 登记的项目 → 组 → 仓），逐仓输出，末尾汇总。
-    python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id] [--all]
+        --all：级联扫描当前系统登记的仓（scripts/projects.json 项目 → 组 → 仓），逐仓输出，末尾汇总。
+               范围 = --system 点名的系统；不点名就用 --repo-dir 所在的系统（两套系统各扫各的）。
+               锚点不在任何登记系统里时报错退出，不静默扩大范围到别的系统。
+        --system：级联时点名要扫的系统（projects[].project 的名字），跨系统才用。
+    python code_check.py recheck [--author 姓名] [--since 时间] [--from 提交id] [--all] [--system 系统名]
         重查：列范围内所有项（含已查，全过滤的不列），每条带「已查 N 次」；check_count 随 mark 递增。
-        --all：级联重查所有登记仓。
+        --all / --system：同 scan。
     python code_check.py baseline [--author 姓名]
         刷库建基线：全部历史 commit 标记已检查（check_count=0 种子），不实际检查。
     python code_check.py mark [--commit <hash>]... [--file <路径>:<内容hash>]...
@@ -335,16 +339,24 @@ def load_projects_cfg(script_dir):
         return {}
 
 
-def discover_repos(script_dir):
-    """级联发现所有登记仓。
+def discover_repos(script_dir, cfg=None, project_names=None):
+    """级联发现登记仓。
 
     数据源 = 技能目录 scripts/projects.json：projects[].root + exclude + groups[].repos[]。
     groups 里给了分组名与每个仓的中文名（cn），报告按分组分层、文件名带中文名。
-    返回 [{root, name, cn, group, project, project_root}]，按项目→分组→仓顺序。
+
+    cfg：已读出的配置（不传就现读文件，避免同一命令里读两遍）。
+    project_names：只收哪几套系统（None = 全部）。级联命令默认只传锚点那一套，
+                   底稿与档案是两套独立系统，不互相串。
+    返回 [{root, name, cn, dir, group, project, project_root}]，按项目→分组→仓顺序。
     """
-    cfg = load_projects_cfg(script_dir)
+    if cfg is None:
+        cfg = load_projects_cfg(script_dir)
     repos = []
     for proj in cfg.get("projects", []):
+        pname = proj.get("project") or ""
+        if project_names is not None and pname not in project_names:
+            continue
         root = proj.get("root")
         if not root or not os.path.isdir(root):
             continue
@@ -371,10 +383,83 @@ def discover_repos(script_dir):
                     "cn": cn,
                     "dir": d,
                     "group": gname,
-                    "project": proj.get("project") or "",
+                    "project": pname,
                     "project_root": root,
                 })
     return repos
+
+
+def system_names(cfg):
+    """配置里登记的系统名（projects[].project），用于报错提示可选项。"""
+    return [p.get("project") for p in cfg.get("projects", []) if p.get("project")]
+
+
+def anchor_path(repo_dir):
+    """级联锚点：优先取 git 仓根（在仓的子目录里敲也能定位），不是 git 仓就用传入目录本身。"""
+    try:
+        return repo_root(repo_dir)
+    except RuntimeError:
+        return os.path.abspath(repo_dir)
+
+
+def is_within(path, parent):
+    """path 是否落在 parent 目录内（含相等）。两边都按 realpath + normcase 归一。
+
+    归一为的是防符号链接、大小写差异把归属判错；不同盘符时 commonpath 抛 ValueError，
+    按「不在里面」处理，不影响其他候选根继续比。
+    """
+    try:
+        p = os.path.normcase(os.path.realpath(path))
+        q = os.path.normcase(os.path.realpath(parent))
+    except OSError:
+        return False
+    if p == q:
+        return True
+    try:
+        return os.path.commonpath([p, q]) == q
+    except ValueError:
+        return False
+
+
+def resolve_scope_project(cfg, anchor):
+    """按锚点目录判定这次级联属于哪套系统。
+
+    返回配置里的 project 条目；锚点不落在任何登记根下返回 None。
+    多个登记根嵌套时取路径最长的那个（更具体的那套）。
+    """
+    best, best_len = None, -1
+    for proj in cfg.get("projects", []):
+        root = proj.get("root")
+        if not root or not os.path.isdir(root):
+            continue
+        if not is_within(anchor, root):
+            continue
+        n = len(os.path.normcase(os.path.realpath(root)))
+        if n > best_len:
+            best, best_len = proj, n
+    return best
+
+
+def resolve_cascade_scope(args, cfg):
+    """定级联范围：返回 (系统名, 错误提示)。错误提示非空时调用方直接退出，不扫任何仓。
+
+    --system 点名优先；不点名就用 --repo-dir 所在系统。两套系统互不越界，
+    锚点没有归属时不静默退回「全扫」，免得在无关目录里一敲就把别的系统扫了。
+    """
+    named = getattr(args, "system", None)
+    names = system_names(cfg)
+    if named:
+        if named not in names:
+            return None, "❌ 没有这个系统: {}（可选：{}）".format(
+                named, " / ".join(names) if names else "配置为空")
+        return named, ""
+    anchor = anchor_path(args.repo_dir)
+    proj = resolve_scope_project(cfg, anchor)
+    if proj is None:
+        return None, ("❌ 当前目录不属于任何登记系统：{}\n"
+                      "   用 --system <系统名> 指定要扫哪一套（可选：{}）").format(
+                          anchor, " / ".join(names) if names else "配置为空")
+    return proj.get("project") or "", ""
 
 
 # ---------------- 数据库 ----------------
@@ -622,21 +707,32 @@ def split_files_by_ignore(files, patterns):
 
 
 def cmd_scan_all(args, mode):
-    """级联扫描/重查所有登记仓。
+    """级联扫描/重查一套系统登记的仓。
 
     数据源 = scripts/projects.json（projects[].root + exclude + groups[].repos[]）。
+    范围：`--system` 点名的系统，否则 `--repo-dir` 所在的系统 —— 底稿、档案是两套独立系统，
+    互不越界；锚点没有归属时报错退出，不静默退回全扫。
     报告落位：<项目根>/.code-check-reports/<分组名>/<日期_时间_中文名_...>.md
-    —— 与调用 skill 时所在目录无关。
+    —— 落位只跟仓所属项目有关，与在哪敲无关。
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    repos = discover_repos(script_dir)
+    cfg = load_projects_cfg(script_dir)
+    if not cfg.get("projects"):
+        print("❌ 级联配置为空或读不到：{}".format(
+            os.path.join(script_dir, PROJECTS_CFG_NAME)), file=sys.stderr)
+        return
+    project, err = resolve_cascade_scope(args, cfg)
+    if err:
+        print(err, file=sys.stderr)
+        return
+    repos = discover_repos(script_dir, cfg=cfg, project_names=[project])
     if not repos:
-        print("❌ 未发现任何登记仓。检查 {}".format(
-            os.path.join(script_dir, PROJECTS_CFG_NAME)))
+        print("❌ 系统「{}」下没有可扫的仓，检查 {}".format(
+            project, os.path.join(script_dir, PROJECTS_CFG_NAME)), file=sys.stderr)
         return
 
     print("=" * 60)
-    print("code-check {}：级联 {} 个仓".format(mode, len(repos)))
+    print("code-check {}：系统「{}」，级联 {} 个仓".format(mode, project, len(repos)))
     print("=" * 60)
     print()
 
@@ -646,7 +742,7 @@ def cmd_scan_all(args, mode):
     for repo in repos:
         root = repo["root"]
         name = repo["name"]
-        # 报告落点：<项目根>/.code-check-reports/<分组名>/，与调用点无关
+        # 报告落点：<项目根>/.code-check-reports/<分组名>/，只跟仓所属项目有关
         report_root = os.path.join(repo["project_root"], REPORT_DIR_NAME, repo["group"]) \
             if repo["group"] else os.path.join(repo["project_root"], REPORT_DIR_NAME)
 
@@ -655,6 +751,7 @@ def cmd_scan_all(args, mode):
         sub.title = "{}（{}）".format(name, repo["dir"])
         sub.suppress_mark = True
         sub.all = False
+        sub.system = None   # 范围已在上层定好，逐仓跑时别再提示 --system 无效
 
         if mode == "扫描":
             buf = io.StringIO()
@@ -698,8 +795,8 @@ def cmd_scan_all(args, mode):
                 print()
 
     print("=" * 60)
-    print("汇总：{} 个仓，有改动的 {} 个，共 {} 个 commit / {} 个工作区文件".format(
-        len(repos), len(touched), total_commit, total_file))
+    print("汇总（系统「{}」）：{} 个仓，有改动的 {} 个，共 {} 个 commit / {} 个工作区文件".format(
+        project, len(repos), len(touched), total_commit, total_file))
     if touched:
         print()
         print("有改动的仓（报告落位：<项目根>/{}/<分组名>/）".format(REPORT_DIR_NAME))
@@ -709,10 +806,18 @@ def cmd_scan_all(args, mode):
     print("=" * 60)
 
 
+def warn_system_without_all(args):
+    """--system 只配合 --all 使用；单仓模式按 --repo-dir 走，点了也没用，提示一下。"""
+    if getattr(args, "system", None) and not args.all:
+        print("⚠ --system 只跟 --all 一起用（单仓模式按 --repo-dir 走），本次已忽略",
+              file=sys.stderr)
+
+
 def cmd_scan(args):
-    root = repo_root(args.repo_dir)
+    warn_system_without_all(args)
     if args.all:
         return cmd_scan_all(args, "扫描")
+    root = repo_root(args.repo_dir)
     rid = repo_id(root)
     keys = repo_key_set(root)
     db_path = os.path.join(root, DB_FILENAME)
@@ -959,9 +1064,10 @@ def cmd_mark(args):
 
 def cmd_recheck(args):
     """重查：列范围内所有项（含已查），每条带「已查 N 次」。未指定范围则报错提示。"""
-    root = repo_root(args.repo_dir)
+    warn_system_without_all(args)
     if args.all:
         return cmd_scan_all(args, "重查")
+    root = repo_root(args.repo_dir)
     rid = repo_id(root)
     keys = repo_key_set(root)
     db_path = os.path.join(root, DB_FILENAME)
@@ -1253,8 +1359,10 @@ def main():
                         help="首次使用建基线：把当前全部历史 commit 标记为已检查，"
                              "之后只查基线后新出现的 commit + 未提交工作区改动")
     p_scan.add_argument("--all", action="store_true",
-                        help="级联扫描所有登记仓（scripts/workspaces.txt 里的工作区根 → 子目录中"
-                             "有 .code-check-project.toml 的 git 仓）")
+                        help="级联扫描当前系统登记的仓（scripts/projects.json 项目 → 组 → 仓）；"
+                             "范围 = --system 点名，未点名用 --repo-dir 所在系统")
+    p_scan.add_argument("--system", default=None,
+                        help="级联时点名系统（projects[].project 的名字，如 档案V6）；跨系统才用")
 
     p_recheck = sub.add_parser("recheck", help="重查：列范围内所有项（含已查）带次数")
     p_recheck.add_argument("--author", default=None, help="只查该作者的提交")
@@ -1263,7 +1371,9 @@ def main():
     p_recheck.add_argument("--from", dest="from_commit", default=None,
                            help="从该提交起（含）往后查，如 acd4fef8")
     p_recheck.add_argument("--all", action="store_true",
-                           help="级联重查所有登记仓")
+                           help="级联重查当前系统登记的仓；范围规则同 scan --all")
+    p_recheck.add_argument("--system", default=None,
+                           help="级联时点名系统（projects[].project 的名字，如 档案V6）；跨系统才用")
 
     p_baseline = sub.add_parser("baseline", help="刷库建基线：标记全部历史 commit，不检查")
     p_baseline.add_argument("--author", default=None, help="只标记该作者的提交")

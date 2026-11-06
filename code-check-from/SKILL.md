@@ -23,10 +23,11 @@ motto: "增量检查不是偷懒——查过的记下来，只碰新代码。"
 5. **标记写回**：`python "F:/idea-workspase-skills/code-check/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ... --file <路径>:<内容hash> ...`
 6. **复查**：`scan --from <commitId> --quiet` 应显示无待查
 
-**级联多仓**：本命令也支持 `--all`（一次扫 `scripts/projects.json` 里登记的所有仓）。
-用户说「检查所有项目」「把几个仓都查一遍」时，在命令后加 `--all`。
+**级联多仓**：本命令也支持 `--all`（一次扫**当前系统**在 `scripts/projects.json` 里登记的仓）。用户说「检查所有项目」「把几个仓都查一遍」时，在命令后加 `--all`；`--all` 只扫锚点所在的那套系统（底稿 / 档案互不越界），跨系统另加 `--system <系统名>`。
 纳入判据：读 `scripts/projects.json` 的 `projects[].root` + `exclude` + `groups[].repos[]`，配置里没有的仓不进。
 报告落 `<项目根>/.code-check-reports/<分组名>/`，文件名带项目中文名（`--report-root` + `--project-name`）。
 
 ## 说明
 - 该范围内已检查过的项不重复列（首查语义）；二次检查用 `/code-recheck-from`
+
+最后修改：2026-11-06

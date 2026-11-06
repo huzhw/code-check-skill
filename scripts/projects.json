@@ -1,5 +1,5 @@
 {
-  "note": "code-check 级联配置：登记本机所有项目的工作区根、排除项、分组与每个仓的中文名。skill 读它做级联扫描与报告命名。格式仿 legacy-audit.projects.json，但扩展为多项目 + 仓级中文名（cn）。",
+  "note": "code-check 级联配置：登记本机所有项目的工作区根、排除项、分组与每个仓的中文名。skill 读它做级联扫描与报告命名。每个 projects[].project 是一套独立系统（底稿 / 档案），--all 每次只扫一套：默认 = --repo-dir 锚点所在那套，跨系统用 --system 点名；锚点不属于任何系统时报错。格式仿 legacy-audit.projects.json，但扩展为多项目 + 仓级中文名（cn）。",
   "projects": [
     {
       "project": "中信底稿V5",

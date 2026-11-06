@@ -35,8 +35,8 @@ SQLite 已查记录 ┘         未提交工作区改动 ──┘
 `{技能目录}/scripts/code_check.py`，Python 标准库 sqlite3，零第三方依赖。
 
 ```bash
-python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id] [--all]   # 扫描待检查改动（只列未检查的新项）
-python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> recheck [--since 时间] [--from 提交id] [--all]   # 重查：列范围内所有项（含已查）带次数
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> scan [--author 姓名] [--json] [--quiet] [--since 时间] [--from 提交id] [--all] [--system 系统名]   # 扫描待检查改动（只列未检查的新项）
+python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> recheck [--since 时间] [--from 提交id] [--all] [--system 系统名]   # 重查：列范围内所有项（含已查）带次数
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> baseline                                   # 刷库建基线：标记全部历史，不检查
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> mark --commit <hash> ...                 # 标记 commit 已检查（重复标记次数+1）
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> mark --file <路径>:<内容hash> ...         # 标记文件已检查
@@ -65,12 +65,20 @@ python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path [-
 
 ## 级联多仓（--all）
 
-一个工作区根下有多个项目仓时，用 `--all` 一次扫全部：
+一套系统的工作区根下有多个项目仓时，用 `--all` 一次扫这套系统的全部仓：
 
 ```bash
 python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> scan --all
 python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> recheck --all --since today
 ```
+
+**范围（两套系统互不越界）**：`scripts/projects.json` 里每个 `projects[].project` 是一套独立系统（本机现有「中信底稿V5」「档案V6」）。`--all` 每次只扫**一套**：
+
+| 情形 | 扫哪些仓 |
+|---|---|
+| 默认（不点名） | `--repo-dir` 锚点所在的那套：在底稿的仓里敲只扫底稿，在档案的仓里敲只扫档案 |
+| 锚点不在任何登记系统里（如在技能仓里敲） | **直接报错**并列出可选系统名，不静默扫全部 |
+| 加 `--system <系统名>` | 显式点名的那套，跨系统才用 |
 
 **纳入判据**：读技能目录 `scripts/projects.json` —— `projects[].root` + `exclude` + `groups[].repos[]`。配置里没有的仓一律不进 `--all`（如 tomcat 运行时目录、非目标项目），要加仓就在该文件里加一条。
 
@@ -99,13 +107,13 @@ python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> recheck --a
 
 `cn` = 仓库中文名，用于报告文件名；`groups[].name` = 分组名，用于报告目录分层。`repos` 也接受纯字符串（无中文名时用目录名兜底）。
 
-**报告落位（与调用点无关）**：级联模式下报告落到 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
+**报告落位**：级联模式下报告落到 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
 
 ```
 F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓/20261105_221822_底稿主仓_recheck_5d938dc.md
 ```
 
-调用 skill 时所在的目录是哪个仓**不影响**结果 —— 在主仓敲还是在引擎仓敲，扫的都是同一批仓、报告都落同样位置。
+落位只跟仓所属项目有关（底稿的报告永远在底稿项目根下、档案的永远在档案项目根下），与在哪敲无关；扫哪套由上面那张表定。
 
 **报告路径生成**（`report-path`）：
 
@@ -300,3 +308,5 @@ python -c "import sqlite3;c=sqlite3.connect('.code-check.db');c.execute('DELETE 
 ---
 
 > 增量检查不是偷懒——查过的记下来，只碰新代码，改动越多查得越稳。
+
+最后修改：2026-11-06
