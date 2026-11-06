@@ -43,7 +43,8 @@ code-check 增量代码检查脚本
     python code_check.py report-path [--commit <hash>]... [--work] [--recheck]
                             [--report-root 目录] [--project-name 中文名]
         建报告目录并打印报告文件路径（日期_时间[_recheck][_共N个_最早~最新][+work]），AI 写内容。
-        --report-root：报告落到指定目录（级联模式用「工作区根/.code-check-reports」），默认被检查仓自己。
+        --report-root：报告落到指定目录，显式指定优先；不指定时单仓写被检查仓自己，
+                       级联（--all）的落位提示按「执行命令时所在目录的 git 根/.code-check-reports/<分组名>/」。
         --project-name：项目中文名，进了报告文件名。
     python code_check.py migrate-repo-id
         把库里旧的 repo 键（remote 地址 / 绝对路径）改写成新的「remote#目录名」键，进度不丢。
@@ -276,6 +277,18 @@ def git(root, *args, check=True):
 def repo_root(start="."):
     out = git(start, "rev-parse", "--show-toplevel")
     return out.strip()
+
+
+def invocation_git_root():
+    """执行命令时所在目录的 git 根（「在哪敲命令，报告落哪」的基座）。
+
+    执行目录（或其上层仍在 git 仓内时取到 top-level）→ 返回该 git 根；
+    不在 git 仓内返回 None，调用方回落项目根逻辑。
+    """
+    try:
+        return repo_root(os.getcwd())
+    except Exception:
+        return None
 
 
 def repo_id(root):
@@ -739,12 +752,16 @@ def cmd_scan_all(args, mode):
     total_commit = 0
     total_file = 0
     touched = []
+    # 报告落点基座：执行命令时所在目录的 git 根（在哪敲命令，报告落哪）；
+    # 执行目录不在 git 仓内 → 回落项目根。--report-root 显式指定时以它为准。
+    invoke_root = invocation_git_root()
     for repo in repos:
         root = repo["root"]
         name = repo["name"]
-        # 报告落点：<项目根>/.code-check-reports/<分组名>/，只跟仓所属项目有关
-        report_root = os.path.join(repo["project_root"], REPORT_DIR_NAME, repo["group"]) \
-            if repo["group"] else os.path.join(repo["project_root"], REPORT_DIR_NAME)
+        base_dir = invoke_root if invoke_root else repo["project_root"]
+        # 报告落点：<基座>/.code-check-reports/<分组名>/（无分组直接基座/.code-check-reports）
+        report_root = os.path.join(base_dir, REPORT_DIR_NAME, repo["group"]) \
+            if repo["group"] else os.path.join(base_dir, REPORT_DIR_NAME)
 
         sub = argparse.Namespace(**vars(args))
         sub.repo_dir = root
@@ -799,7 +816,12 @@ def cmd_scan_all(args, mode):
         project, len(repos), len(touched), total_commit, total_file))
     if touched:
         print()
-        print("有改动的仓（报告落位：<项目根>/{}/<分组名>/）".format(REPORT_DIR_NAME))
+        if invoke_root:
+            print("有改动的仓（报告落位：执行目录 {}/{}/<分组名>/）".format(
+                invoke_root, REPORT_DIR_NAME))
+        else:
+            print("有改动的仓（执行目录不在 git 仓，报告落位回落：<项目根>/{}/<分组名>/）".format(
+                REPORT_DIR_NAME))
         for name, repo, nc, nf, rr in touched:
             print("  · {}（{} / {}）→ {}".format(
                 name, repo["project"], repo["group"], rr))
@@ -1248,7 +1270,8 @@ def cmd_report_path(args):
             如 20260803_103000_底稿主仓_recheck_共24个_e455b7b~db5a92f.md。
     起止取本次 --commit 里按提交时间最早/最晚的短 hash（按时间排序，非传参顺序），体现「提交次数 + 范围」；
     单 commit 只列其 hash。撞名自动追加 _2/_3，避免同秒多次检查互相覆盖。无内容可报时（无 commit 也无工作区改动）报错不建。
-    --report-root：报告落到指定目录（级联模式用「工作区根/.code-check-reports」）；不传则写被检查仓自己。
+    --report-root：报告落到指定目录，显式指定优先；不传则写被检查仓自己。
+                   级联（--all）的落位提示按「执行命令时所在目录的 git 根/.code-check-reports/<分组名>/」。
     --project-name：项目中文名，进了报告文件名。
     """
     root = repo_root(args.repo_dir)

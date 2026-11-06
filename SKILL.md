@@ -107,20 +107,20 @@ python "{技能目录}/scripts/code_check.py" --repo-dir <任意仓> recheck --a
 
 `cn` = 仓库中文名，用于报告文件名；`groups[].name` = 分组名，用于报告目录分层。`repos` 也接受纯字符串（无中文名时用目录名兜底）。
 
-**报告落位**：级联模式下报告落到 `<项目根>/.code-check-reports/<分组名>/`，文件名带中文名：
+**报告落位**：级联模式下报告落到「**执行命令时所在目录的 git 根** + `/.code-check-reports/<分组名>/`」，文件名带中文名：
 
 ```
-F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓/20261105_221822_底稿主仓_recheck_5d938dc.md
+F:/idea-workspase-zhongXin-diGaoV5/standard_thdg_zxdm/.code-check-reports/底稿主仓/20261105_221822_底稿主仓_recheck_5d938dc.md
 ```
 
-落位只跟仓所属项目有关（底稿的报告永远在底稿项目根下、档案的永远在档案项目根下），与在哪敲无关；扫哪套由上面那张表定。
+「在哪敲命令，报告落哪」：在主仓敲就落主仓、在引擎仓敲就落引擎仓；**扫哪套仓与执行目录无关**（由级联配置表定）。执行目录不在 git 仓内 → 级联扫描会打提示，报告落位回落 `<项目根>/.code-check-reports/<分组名>/`；`--report-root` 显式指定总是优先。
 
 **报告路径生成**（`report-path`）：
 
 ```bash
-# 级联：落项目根 + 分组目录，带中文名
+# 级联：默认按「执行目录 git 根 + 分组子目录」落位（scan --all 尾部打印的路径照用即可），带中文名
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓> report-path --commit <hash>... --recheck \
-  --report-root "F:/idea-workspase-zhongXin-diGaoV5/.code-check-reports/底稿主仓" --project-name "底稿主仓"
+  --report-root "<执行目录 git 根>/.code-check-reports/<分组名>" --project-name "<分组名>"
 # 单仓（不带新参数）：仍写被检查仓自己的 .code-check-reports/，行为不变
 python "{技能目录}/scripts/code_check.py" --repo-dir <仓> report-path --commit <hash>...
 ```
@@ -194,7 +194,7 @@ python "{技能目录}/scripts/code_check.py" scan
 1. 取报告路径：`python "{技能目录}/scripts/code_check.py" --repo-dir <仓库> report-path --commit <hash>... [--work] [--recheck]`
    - `--commit`：本次检查的所有 commit 短 hash，可多个；本次含工作区改动加 `--work`；重查加 `--recheck`
    - 脚本在 `<仓库git根>/.code-check-reports/`（与 .code-check.db 同级）建目录，按「日期_时间[_recheck][_共N个_最早~最新][+work]」自动命名（如 `20260803_103000_共24个_e455b7b~db5a92f.md`），起止取本次 commit 按提交时间最早/最晚的短 hash；撞名自动追加 `_2`，打印出目标路径
-   - **级联（--all）时**：加 `--report-root "<项目根>/.code-check-reports/<分组名>" --project-name "<中文名>"`，报告按分组分层、文件名带中文名；不带这两个参数仍是旧行为（写被检查仓自己）
+   - **级联（--all）时**：按「执行命令时所在目录的 git 根 + `/.code-check-reports/<分组名>/`」落位（级联 scan 尾部会打印各仓的目标路径，照用），带中文名；显式传 `--report-root` 总是优先；不带 `--report-root` 仍是旧行为（写被检查仓自己）
 2. 用 Write 工具把下面格式的完整报告写到该路径（用第 1 步打印的绝对路径）
 3. 对话只输出一行：`📄 报告：{路径}` + 结论行（如「⚠️ 需处理 2 个（X1、X2），无紧急」）
 
